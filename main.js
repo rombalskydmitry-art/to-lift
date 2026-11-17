@@ -1,4 +1,7 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.7.6
+/* Журнал ТО лифтов — офлайн PWA, v2.7.16-ОТКАТ
+   v2.7.16: ОТКАТ на стабильную версию от 17.11.2026 23:56 — комиссионный акт с настроенными
+   шрифтами (v2.7.3–v2.7.15), прежний бланк акта приёмки, без динамических подписей.
+   В «Настройки → Справка» теперь явно написано «2.7.16-ОТКАТ».
    v2.7.6: hotfix — main.js теперь вызывает __BOOT_DONE() после старта: без этого
    сторож запуска в index.html считал запуск неудачным и показывал ложную
    «Повреждён сохранённый пакет обновления» + бесконечно чистил кеш.
@@ -2013,7 +2016,7 @@
         ? '<p class="hint">Приёмник данных задан в комплекте приложения и обновляется автоматически вместе с ним.<br><span style="word-break:break-all">' + esc(window.APP_ENDPOINT) + "</span></p>"
         : '<p class="hint">Ссылка Google Apps Script (…/exec) — берётся в «Управление развертываниями».</p>' +
           '<input type="url" id="sEndpoint" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(s.endpoint) + '">') + "</div>" +
-      '<div class="card"><h2>Справка</h2><p class="hint">Версия 2.7 · видов ТО: ' + DATA.forms.length +
+      '<div class="card"><h2>Справка</h2><p class="hint">Версия <b>2.7.16-ОТКАТ (18.11)</b> · видов ТО: ' + DATA.forms.length +
       " · лифтов в справочнике: " + DATA.lifts.length + ".<br>Осмотры хранятся в телефоне до отправки.<br>" +
       'Сборка: <b id="appVer">' + esc(window.__appVer || "—") + '</b></p>' +
       '<div style="margin-top:10px"><button type="button" class="miniBtn" id="sUpd">Проверить обновления</button></div></div>' +
