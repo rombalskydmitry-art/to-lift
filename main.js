@@ -1,4 +1,7 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.7.16-ОТКАТ
+/* Журнал ТО лифтов — офлайн PWA, v2.7.17
+   v2.7.17: акт приёмки на почту и Диск — PDF формирует САМО ПРИЛОЖЕНИЕ при отправке
+   (тот же рендер, что «Скачать акт (PDF)»); сервер только сохраняет готовый файл.
+   v2.7.16: ОТКАТ на стабильную версию.
    v2.7.16: ОТКАТ на стабильную версию от 17.11.2026 23:56 — комиссионный акт с настроенными
    шрифтами (v2.7.3–v2.7.15), прежний бланк акта приёмки, без динамических подписей.
    В «Настройки → Справка» теперь явно написано «2.7.16-ОТКАТ».
@@ -947,6 +950,47 @@
     };
   }
 
+
+  // v2.7.17: PDF акта приёмки для отправки на сервер — ТОТ ЖЕ рендер, что «Скачать акт (PDF)».
+  // Бланк (фон + SVG со значениями) растрируется в canvas и собирается в PDF на устройстве;
+  // сервер только сохраняет готовый файл. Возвращает Promise<base64>.
+  function actPdfData_(d) {
+    return new Promise(function (resolve, reject) {
+      try {
+        if (typeof ACT_FORM === "undefined") return reject(new Error("no-act-form"));
+        if (!window.jspdf) return reject(new Error("no-jspdf"));
+        var f = findForm(d.formType, d.lift && d.lift.u);
+        var b = actBuild_(d, f), G = ACT_FORM.g;
+        var pdf = new window.jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
+        function loadImg(src) {
+          return new Promise(function (ok, no) { var im = new Image(); im.onload = function () { ok(im); }; im.onerror = no; im.src = src; });
+        }
+        var pages = [{ bg: ACT_FORM.bg[0], svg: b.p1 }, { bg: ACT_FORM.bg[1], svg: b.p2 }];
+        var chain = Promise.resolve();
+        pages.forEach(function (pg, idx) {
+          chain = chain.then(function () {
+            var canvas = document.createElement("canvas");
+            canvas.width = 1588; canvas.height = 2245;
+            var ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            return loadImg(pg.bg).then(function (im) {
+              ctx.drawImage(im, 0, 0, canvas.width, canvas.height);
+              var svgStr = '<svg viewBox="0 0 ' + G.W + " " + G.H + '" width="1588" height="2245" xmlns="http://www.w3.org/2000/svg">' + pg.svg + "</svg>";
+              var su = URL.createObjectURL(new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" }));
+              return loadImg(su).then(function (sim) {
+                ctx.drawImage(sim, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(su);
+                if (idx > 0) pdf.addPage();
+                pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, 0, 210, 297, undefined, "FAST");
+              });
+            });
+          });
+        });
+        chain.then(function () { resolve(pdf.output("datauristring").split(",")[1]); }).catch(reject);
+      } catch (e) { reject(e); }
+    });
+  }
+
   function send(p, ep) {
     // no-cors: ответ Google не читаем (он идёт через редирект),
     // но запрос гарантированно выполняется на стороне Apps Script.
@@ -983,7 +1027,15 @@
       if (manual) toast("Нет связи — запись останется в очереди");
       return Promise.resolve();
     }
-    return send(payload(d), ep).then(function () {
+    // v2.7.17: для акта приёмки сначала формируем PDF на устройстве (не хранится в очереди).
+    var prep = d.formType === "Акт приёмки"
+      ? actPdfData_(d).catch(function () { return ""; })
+      : Promise.resolve("");
+    return prep.then(function (b64) {
+      var p = payload(d);
+      if (b64) p.actPdf = b64;
+      return send(p, ep);
+    }).then(function () {
       d.status = "sent"; saveDrafts(a);
       if (state.view === "outbox") render("outbox"); // не сбрасывать другие экраны
     }).catch(function () {
@@ -2016,7 +2068,7 @@
         ? '<p class="hint">Приёмник данных задан в комплекте приложения и обновляется автоматически вместе с ним.<br><span style="word-break:break-all">' + esc(window.APP_ENDPOINT) + "</span></p>"
         : '<p class="hint">Ссылка Google Apps Script (…/exec) — берётся в «Управление развертываниями».</p>' +
           '<input type="url" id="sEndpoint" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(s.endpoint) + '">') + "</div>" +
-      '<div class="card"><h2>Справка</h2><p class="hint">Версия <b>2.7.16-ОТКАТ (18.11)</b> · видов ТО: ' + DATA.forms.length +
+      '<div class="card"><h2>Справка</h2><p class="hint">Версия <b>2.7.17 (PDF из приложения)</b> · видов ТО: ' + DATA.forms.length +
       " · лифтов в справочнике: " + DATA.lifts.length + ".<br>Осмотры хранятся в телефоне до отправки.<br>" +
       'Сборка: <b id="appVer">' + esc(window.__appVer || "—") + '</b></p>' +
       '<div style="margin-top:10px"><button type="button" class="miniBtn" id="sUpd">Проверить обновления</button></div></div>' +
