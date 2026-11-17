@@ -4,4 +4,4 @@
 // механикам вводить её заново не нужно. Меняет только тот, кто развёртывает.
 // Вставьте сюда ваш адрес из «Управление развертываниями» и опубликуйте
 // новую версию приложения — дальше она поедет сама.
-window.APP_ENDPOINT = "https://script.google.com/macros/s/ВСТАВИТЬ_АДРЕС_СКРИПТА/exec";
+window.APP_ENDPOINT = "https://script.google.com/macros/s/AKfycbyW7Ki45PMbRsYKOmahIsNncqGHiT9zsvYOFS5xxKqz6JNqWNGyKxi9kFjuMAppV2F3/exec";
