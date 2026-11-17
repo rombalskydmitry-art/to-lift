@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F4E78">
+<title>Журнал ТО лифтов</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+:root{
+  --bg:#F4F6F9; --card:#FFFFFF; --ink:#1A2330; --muted:#5B6B7C;
+  --accent:#1F4E78; --accent-soft:#E3EDF7; --ok:#1E7A46; --ok-soft:#E2F3E9;
+  --bad:#B3261E; --bad-soft:#FBE7E5; --line:#D9E0E8; --radius:14px;
+  --pad:16px; --topbar-h:64px;
+}
+@media (max-width:360px){:root{--pad:12px}}
+*{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent}
+html{font-size:16px; -webkit-text-size-adjust:100%; text-size-adjust:100%}
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; background:var(--bg); color:var(--ink); min-height:100vh; min-height:100dvh; overflow-x:hidden}
+.app{max-width:560px; margin:0 auto; min-height:100vh; min-height:100dvh; display:flex; flex-direction:column}
+.topbar{position:sticky; top:-1px; z-index:10; background:var(--accent); color:#fff; min-height:56px; padding:12px max(var(--pad),env(safe-area-inset-right)) 12px max(var(--pad),env(safe-area-inset-left)); padding-top:calc(13px + env(safe-area-inset-top)); display:flex; align-items:center; gap:10px}
+.topbar h1{font-size:1.02rem; line-height:1.2; font-weight:700; flex:1; min-width:0; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere}
+.brandLogo{flex:none; width:38px; height:38px; display:block; border-radius:9px; background:#fff; box-shadow:0 0 0 1px rgba(255,255,255,.35)}
+.net{flex:none; white-space:nowrap; font-size:.78rem; padding:4px 10px; border-radius:999px; background:rgba(255,255,255,.18)}
+.net.on{background:#1E7A46}
+.body{flex:1; min-width:0; padding:var(--pad) max(var(--pad),env(safe-area-inset-right)) calc(28px + env(safe-area-inset-bottom)) max(var(--pad),env(safe-area-inset-left)); display:flex; flex-direction:column; gap:12px}
+.card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px}
+.btn{touch-action:manipulation; display:block; width:100%; border:0; border-radius:12px; padding:15px 18px; font-size:1rem; font-weight:600; cursor:pointer; text-align:left; background:var(--accent-soft); color:var(--accent)}
+.btn.primary{background:var(--accent); color:#fff; text-align:center}
+.btn.danger{background:var(--bad-soft); color:var(--bad)}
+.btn:disabled{opacity:.45; cursor:default}
+.btn+.btn{margin-top:10px}
+.btn small{display:block; font-weight:400; color:inherit; opacity:.75; margin-top:2px}
+h2{font-size:1.1rem; margin-bottom:4px}
+p.hint{color:var(--muted); font-size:.9rem; line-height:1.5}
+label{display:block; font-size:.85rem; color:var(--muted); margin:12px 0 6px}
+input[type=text],input[type=password],input[type=url],input[type=date],input[type=number],select,textarea{display:block; width:100%; min-width:0; max-width:100%; min-height:46px; padding:12px 14px; border:1px solid var(--line); border-radius:10px; font:inherit; font-size:1rem; background:#fff; color:var(--ink)}
+input[type=text],input[type=password],input[type=url],input[type=date],input[type=number],textarea{-webkit-appearance:none; appearance:none}
+input[type=date]{text-align:left; line-height:1.2}
+input[type=date]::-webkit-date-and-time-value{text-align:left; min-height:1.2em}
+select{text-overflow:ellipsis}
+.check .txt select,.check .txt input{margin-top:8px}
+textarea{min-height:80px; resize:vertical}
+.list{display:flex; flex-direction:column; gap:8px}
+.item{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px}
+.item .t{font-weight:600; margin-bottom:2px}
+.item .s{font-size:.85rem; color:var(--muted)}
+.item.pending{border-color:var(--bad); background:var(--bad-soft)}
+.sec{background:var(--accent-soft); color:var(--accent); font-weight:700; font-size:.85rem; letter-spacing:.02em; padding:10px 14px; border-radius:10px; margin-top:14px}
+.module{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden}
+.mHead{display:flex; align-items:center; gap:10px; width:100%; min-height:52px; padding:12px 16px; border:0; background:none; font:inherit; font-weight:700; color:var(--ink); text-align:left; cursor:pointer; touch-action:manipulation}
+.mHead:active{background:var(--accent-soft)}
+.mTitle{flex:1; min-width:0; overflow-wrap:anywhere}
+.mHead:after{content:"\203A"; flex:none; width:14px; text-align:center; font-size:1.3rem; line-height:1; color:var(--muted); transition:transform .15s}
+.module.open>.mHead{background:var(--accent-soft); color:var(--accent); box-shadow:inset 0 -1px 0 var(--line)}
+.module.open>.mHead:after{transform:rotate(90deg); color:var(--accent)}
+.module:not(.open)>.mBody{display:none}
+.moduleCount{flex:none; font-size:.78rem; font-weight:600; padding:3px 9px; border-radius:999px; background:var(--accent-soft); color:var(--accent); white-space:nowrap}
+.module.open>.mHead .moduleCount{background:#fff}
+.mBody>.check{border:0; border-top:1px solid var(--line); border-radius:0}
+.mBody>.sec{margin:10px 12px}
+.mBody>.item{border:0; border-top:1px solid var(--line); border-radius:0; padding:12px 16px}
+.module.sub{margin:0; border:0; border-top:1px solid var(--line); border-radius:0}
+.module.sub>.mHead{color:var(--ink); font-weight:600; min-height:48px; padding:12px 16px 12px 26px}
+.module.sub.open>.mHead{background:var(--card); color:var(--ink)}
+.module.sub.open>.mHead:after{color:var(--ink)}
+.module.sub .item{padding:10px 16px 10px 26px}
+
+.item .t,.check .works{overflow-wrap:anywhere}
+.moduleActions{display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end}
+.miniBtn{touch-action:manipulation; border:1px solid var(--line); background:var(--card); color:var(--accent); border-radius:10px; padding:8px 12px; min-height:40px; font-size:.85rem; cursor:pointer}
+.check{display:flex; flex-wrap:wrap; gap:10px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px}
+.check .txt{flex:1 1 200px; min-width:0}
+.check .works{font-size:.95rem}
+.check .req{font-size:.8rem; color:var(--muted); margin-top:2px}
+.check .note{margin-top:8px}
+.check .own{margin-top:8px}
+.toggles{display:flex; gap:8px; flex:none}
+.tgl{flex:0 0 46px; width:46px; height:46px; border-radius:12px; border:2px solid var(--line); background:#fff; font-size:1.25rem; font-weight:700; color:var(--muted); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; line-height:1}
+.tgl.ok.on{background:var(--ok); border-color:var(--ok); color:#fff}
+.tgl.bad.on{background:var(--bad); border-color:var(--bad); color:#fff}
+/* отклик нажатия — видно, что кнопка сработала (меняет цвет и прожимается) */
+.btn,.tgl,.miniBtn,.aiMode,.aiExample,.aiSaveDoc{transition:transform .07s ease, background .1s ease, color .1s ease, filter .07s ease}
+.btn:active,.btn.pressed{background:var(--accent)!important; color:#fff!important; transform:scale(.98)}
+.btn.primary:active,.btn.primary.pressed{background:#0E2A42!important}
+.btn.danger:active,.btn.danger.pressed{background:var(--bad)!important; color:#fff!important}
+.tgl:active,.tgl.pressed{transform:scale(.82); filter:brightness(.7)}
+.miniBtn:active,.miniBtn.pressed{background:var(--accent); color:#fff; transform:scale(.94)}
+.aiMode:active,.aiExample:active,.aiSaveDoc:active{filter:brightness(.85); transform:scale(.95)}
+@media (max-width:379px){.toggles{flex:1 1 100%} .tgl{flex:1 1 0; width:auto}}
+.clList{display:flex; flex-direction:column; gap:8px}
+.badge{display:inline-block; font-size:.75rem; padding:3px 10px; border-radius:999px; font-weight:600}
+.badge.q{background:#FDF3D7; color:#8A6D00}
+.badge.sent{background:var(--ok-soft); color:var(--ok)}
+.badge.fail{background:var(--bad-soft); color:var(--bad)}
+.empty{text-align:center; color:var(--muted); padding:40px 16px; font-size:.95rem}
+.row{display:flex; gap:10px; align-items:center; justify-content:space-between}
+.statusbar{font-size:.85rem; color:var(--muted); text-align:center; padding:8px var(--pad)}
+.kbd{background:#EDF1F5; border-radius:8px; padding:12px 14px; font-family:ui-monospace,Consolas,monospace; font-size:.78rem; white-space:pre-wrap; word-break:break-word; max-height:260px; overflow:auto}
+.back{flex:none; white-space:nowrap; min-height:40px; margin-left:-8px; background:none; border:0; color:#fff; font-size:1rem; cursor:pointer; padding:6px 8px}
+.search-res{margin-top:8px}
+.search-res .item{cursor:pointer}
+.search-res .item:active{background:var(--accent-soft)}
+/* ---- ИИ-ассистент ---- */
+.aiWrap{display:flex; flex-direction:column; gap:8px}
+.aiTop{flex:none; display:flex; flex-direction:column; gap:8px}
+.aiModes{display:flex; gap:8px; align-items:stretch}
+.aiMode{flex:1; min-width:0; border:1px solid var(--line); background:var(--card); color:var(--accent); border-radius:10px; padding:10px 8px; font-size:.9rem; font-weight:600; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.aiMode.on{background:var(--accent); color:#fff; border-color:var(--accent)}
+.aiIcon{flex:none; width:44px; border:1px solid var(--line); background:var(--card); color:var(--muted); border-radius:10px; display:flex; align-items:center; justify-content:center; cursor:pointer}
+.aiIcon:active{background:var(--accent-soft)}
+.aiIcon svg{width:20px; height:20px}
+#aiCfg{padding:10px 14px}
+.aiChip{align-self:flex-start; max-width:100%; display:inline-flex; gap:8px; align-items:center; background:var(--accent-soft); color:var(--accent); border-radius:999px; padding:6px 12px; font-size:.82rem; font-weight:600}
+.aiChip span{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.aiChip b{flex:none; cursor:pointer; padding:0 2px}
+#aiChat{flex:1 1 0; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; display:flex; flex-direction:column; gap:10px; padding:2px 1px; position:relative}
+#aiChat>*{flex:none}
+#aiChat>.aiPickBox{flex:1 1 0}
+.aiUser{align-self:flex-end; max-width:86%; background:var(--accent); color:#fff; border:0; border-radius:18px 18px 4px 18px; padding:10px 14px; line-height:1.4; overflow-wrap:anywhere}
+.aiAnswer,.aiGeneral,.aiError{border-radius:4px 16px 16px 16px; padding:14px 16px}
+.aiAnswer{border-left:4px solid var(--accent)}
+.aiGeneral{border-left:4px solid #E3B341; background:#FFFBEB}
+.aiError{background:var(--bad-soft); border-color:#E8B4B0; color:var(--bad)}
+.aiGenTag{font-size:.8rem; font-weight:700; color:#8A6D00; margin-bottom:8px}
+.aiSys{align-self:flex-start; color:var(--muted); font-size:.9rem; padding:4px 6px}
+.aiDots i{display:inline-block; width:5px; height:5px; margin-left:3px; border-radius:50%; background:currentColor; animation:aiDot 1.2s infinite ease-in-out}
+.aiDots i:nth-child(2){animation-delay:.2s}
+.aiDots i:nth-child(3){animation-delay:.4s}
+@keyframes aiDot{0%,80%,100%{opacity:.25}40%{opacity:1}}
+.aiText{font-size:.96rem; line-height:1.5; overflow-wrap:anywhere}
+.aiText p{margin:0 0 8px}
+.aiText ul,.aiText ol{margin:0 0 8px; padding-left:22px}
+.aiText li{margin:3px 0}
+.aiText .aiH{font-weight:700; margin:10px 0 4px}
+.aiText>:last-child{margin-bottom:0}
+.aiRef{display:inline-block; background:var(--accent-soft); color:var(--accent); border-radius:6px; padding:0 6px; font-size:.78rem; font-weight:600; white-space:nowrap}
+.aiSources{margin-top:12px; padding-top:10px; border-top:1px solid var(--line); font-size:.82rem; color:var(--muted)}
+.aiSrcTitle{font-weight:700}
+.aiSource{margin-top:7px; padding:9px 11px; background:var(--accent-soft); border-radius:10px; color:var(--accent); cursor:pointer; line-height:1.35}
+.aiSource:active{filter:brightness(.95)}
+.aiSrcHead{display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:2px}
+.aiSrcName{font-weight:600; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden}
+.aiPage{flex:none; background:#fff; border-radius:999px; padding:1px 8px; font-size:.72rem; white-space:nowrap}
+.aiSnip{margin-top:4px; font-size:.78rem; color:var(--muted); line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.aiDbg{margin-top:10px; font-size:.72rem; color:var(--muted)}
+.aiDbg summary{cursor:pointer}
+.aiWelcome{padding:18px 16px}
+.aiWelcome h2{font-size:1.15rem; margin-bottom:6px}
+.aiExamples{display:flex; flex-direction:column; gap:8px; margin-top:14px}
+.aiExamples .btn{margin:0}
+.aiExample{font-size:.9rem; padding:11px 14px}
+.aiPickBox{flex:1 1 0; min-height:0; display:flex; flex-direction:column; gap:8px}
+.aiPickHead{flex:none; display:flex; gap:8px; align-items:stretch}
+.aiPickHead input{flex:1; min-width:0}
+.aiPickHead .aiMode{flex:none; padding:10px 14px}
+.aiPickHint{flex:none; font-size:.82rem; color:var(--muted); padding:0 2px}
+#aiPickRes{flex:1 1 0; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; background:var(--card); border:1px solid var(--line); border-radius:var(--radius)}
+#aiPickRes.list{gap:0}
+#aiPickRes .item{border:0; border-top:1px solid var(--line); border-radius:0; padding:12px 16px; cursor:pointer}
+#aiPickRes .item:first-child{border-top:0}
+#aiPickRes .item:active{background:var(--accent-soft)}
+#aiPickRes .empty{padding:24px 16px}
+.aiBar{flex:none; display:flex; gap:8px; align-items:flex-end; background:var(--bg); padding:4px 0 max(2px, env(safe-area-inset-bottom))}
+.aiBar textarea{flex:1; min-width:0; min-height:46px; max-height:120px; resize:none; font-family:inherit; line-height:1.35; padding:12px 16px; border-radius:23px}
+.aiBar .aiSend{flex:none; width:46px; height:46px; padding:0; margin:0; border-radius:50%; display:flex; align-items:center; justify-content:center}
+.aiBar .aiSend svg{width:20px; height:20px}
+/* кнопка «＋ В библиотеку» у источников из веб-поиска */
+.aiSaveDoc{margin-left:auto; border:1px solid var(--accent); background:var(--card); color:var(--accent); border-radius:8px; padding:3px 10px; font-size:.78rem; font-weight:700; cursor:pointer; white-space:nowrap}
+.aiSaveDoc:disabled{opacity:.65; cursor:default}
+.hidden{display:none!important}
+.progress{position:sticky; top:var(--topbar-h,64px); background:var(--bg); padding:6px 0; font-size:.85rem; color:var(--muted); z-index:5}
+#toast{position:fixed; left:50%; bottom:calc(28px + env(safe-area-inset-bottom)); transform:translateX(-50%); background:var(--ink); color:#fff; padding:12px 20px; border-radius:12px; font-size:.9rem; z-index:50; opacity:0; transition:opacity .25s; pointer-events:none; width:max-content; max-width:calc(100% - 32px); text-align:center}
+.check.miss{border-color:#E3B341; background:#FFFBEB}
+.check .st.miss,select.miss{border-color:#E3B341}
+input.miss{border-color:var(--bad); background:var(--bad-soft)}
+#printroot{display:none}
+/* бейдж Netlify перекрывает нижние кнопки — скрываем */
+#netlify-badge,[class*="netlify-badge"],[id*="netlify"],iframe[src*="netlify"]{display:none!important}
+@media print{
+  body{background:#fff}
+  .app,#toast{display:none!important}
+  #printroot{display:block; font:12pt/1.4 "Segoe UI",Arial,sans-serif; color:#000; padding:10mm}
+  #printroot h1{font-size:15pt; text-align:center; margin-bottom:6mm}
+  #printroot h3{font-size:11pt; margin:5mm 0 2mm; border-bottom:1px solid #000; padding-bottom:1mm}
+  #printroot table{width:100%; border-collapse:collapse}
+  #printroot td{border:1px solid #999; padding:4px 6px; vertical-align:top}
+  #printroot th{border:1px solid #999; padding:4px 6px; text-align:left}
+  #printroot td.v,#printroot th{font-weight:600}
+  #printroot .ah{margin-bottom:5mm; line-height:1.7}
+  #printroot .sign{margin-top:10mm; line-height:2}
+  #printroot table.tight td,#printroot table.tight th{font-size:9pt; padding:2px 4px}
+  #printroot .cardPrint{font-size:9pt; line-height:1.25}
+  #printroot .cardPrint h1{font-size:14pt; margin-bottom:3mm}
+  #printroot .cardPrint h3{font-size:10pt; margin:3mm 0 1mm; break-after:avoid}
+  #printroot .cardPrint td:first-child{width:63%}
+  #printroot .cardPrint tr{break-inside:avoid}
+  #printroot .printMeta{margin-top:4mm; font-size:8pt; color:#555}
+  #printroot td.c{text-align:center}
+  /* поэтажная сетка акта (двери шахты, крыша кабины) */
+  #printroot table.flGrid{table-layout:fixed}
+  #printroot table.flGrid td,#printroot table.flGrid th{font-size:6.5pt; padding:1px 1px; text-align:center; border:1px solid #999}
+  #printroot table.flGrid td.flName,#printroot table.flGrid th.flName{width:34mm; text-align:left; font-size:7.5pt; padding:2px 3px}
+  #printroot table.flGrid tr{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <img class="brandLogo" src="icon.svg" alt="Журнал ТО лифтов">
+    <button class="back hidden" id="btnBack">‹ Назад</button>
+    <h1 id="title">Журнал ТО лифтов</h1>
+    <span class="net" id="net">офлайн</span>
+  </div>
+  <div class="body" id="screen"></div>
+  <div class="statusbar" id="statusbar"></div>
+</div>
+<div id="toast"></div>
+<div id="printroot"></div>
+<script>
+/* Страховка запуска PWA: если после обновления телефону досталась битая смесь кешей,
+   один раз перезагружаемся, затем чистим ТОЛЬКО кеш оболочки и service worker.
+   localStorage (аккаунт, настройки, неотправленные осмотры) не трогаем. */
+(function(){
+  var KEY="to_boot_fail", fails=0;
+  try{fails=parseInt(localStorage.getItem(KEY)||"0",10)||0; localStorage.setItem(KEY,String(fails+1));}catch(e){}
+  window.__BOOT_OK=false;
+  window.__BOOT_DONE=function(){window.__BOOT_OK=true; try{localStorage.removeItem(KEY);}catch(e){}};
+  window.__REPAIR_APP=function(){
+    var p=Promise.resolve();
+    if("caches" in window)p=p.then(function(){return caches.keys();}).then(function(keys){
+      return Promise.all(keys.filter(function(k){return k.indexOf("lift-shell-")===0||k==="lift-meta";}).map(function(k){return caches.delete(k);}));
+    });
+    if("serviceWorker" in navigator)p=p.then(function(){return navigator.serviceWorker.getRegistrations();}).then(function(rs){
+      return Promise.all(rs.map(function(r){return r.unregister();}));
+    });
+    p.finally(function(){location.reload();});
+  };
+  setTimeout(function(){
+    if(window.__BOOT_OK)return;
+    if(fails===0){location.reload();return;}
+    if(fails===1){window.__REPAIR_APP();return;}
+    var s=document.getElementById("screen");
+    if(s)s.innerHTML='<div class="card"><h2>Не удалось запустить приложение</h2><p class="hint">Повреждён сохранённый пакет обновления. Нажмите кнопку ниже: будут очищены только файлы оболочки, аккаунт и неотправленные осмотры сохранятся.</p></div><button class="btn primary" onclick="__REPAIR_APP()">Починить запуск</button>';
+  },9000);
+})();
+</script>
+<script src="config.js"></script>
+<script src="data.js"></script>
+<script src="act_form.js"></script>
+<script src="main.js"></script>
+</body>
+</html>

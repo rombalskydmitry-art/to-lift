@@ -1,0 +1,17 @@
+{
+  "name": "Журнал ТО лифтов",
+  "short_name": "ТО Лифты",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#F4F6F9",
+  "theme_color": "#1F4E78",
+  "description": "Офлайн-чек-листы технического обслуживания лифтов с отправкой в таблицу",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
