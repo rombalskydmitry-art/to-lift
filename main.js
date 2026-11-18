@@ -1,4 +1,7 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.8.5
+/* Журнал ТО лифтов — офлайн PWA, v2.8.6
+   v2.8.6: в «Исходящих» печать акта приёмки использует новый трёхстраничный бланк;
+   комиссионная печать повторяет серверные правила v18.9: короткие замечания,
+   комментарии отдельными строками, Times New Roman и стабильные подписи 2×2.
    v2.8.5: акт приёмки формируется на сервере в DOCX из точного шаблона;
    приложение отправляет только данные чек-листа, без PDF и base64.
    v2.8.4: ручная проверка сравнивает только хэш оболочки (без ложного сообщения
@@ -2243,7 +2246,7 @@
   function printHTML(inner, fileName) {
     var hint = '<div class="noprint pbar">' +
       '<button type="button" id="downloadAct" onclick="savePdf_()">Скачать акт (PDF)</button>' +
-      '<div class="ptip">PDF содержит две страницы акта. На iPhone после открытия меню выберите «Сохранить в Файлы».</div></div>' +
+      '<div class="ptip">PDF содержит все страницы акта. На iPhone после открытия меню выберите «Сохранить в Файлы».</div></div>' +
       '<script>async function savePdf_(){' +
       'var btn=document.getElementById("downloadAct");btn.disabled=true;btn.textContent="Формируем PDF…";' +
       'try{if(!window.html2canvas||!window.jspdf)throw new Error("PDF-модуль не загружен");' +
@@ -2321,9 +2324,8 @@
     return [String(v), note];
   }
 
-  // Печать акта осмотра: «Акт приёмки» печатается ПОЛНОЙ КОПИЕЙ бланка
-  // «Форма_Передаточного_акта.pdf», остальные виды ТО — табличной формой
-  // со всеми пунктами и ведомостью замечаний.
+  // Печать акта осмотра: «Акт приёмки» печатается по действующему
+  // трёхстраничному DOCX-бланку, остальные виды ТО — прежней табличной формой.
   var FLOORS_ = ["-2", "-1", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13",
     "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"];
   function floorSet_(v) {
@@ -2362,7 +2364,12 @@
     return order.map(function (addr) { return { addr: addr, records: g[addr] }; });
   }
 
-  // замечания одного акта приёмки (тот же принцип, что и в actBuild_)
+  function commissionCommentRowsLocal_(label, value) {
+    return String(value || "").split(/,|\r?\n/).map(function (x) { return x.trim(); })
+      .filter(Boolean).map(function (x, i) { return (i ? "" : label + ": ") + x; });
+  }
+
+  // Тот же формат, что на сервере v18.9: название пункта и результат, без it.works.
   function commissionDefects(d) {
     var f = findForm("Акт приёмки", d.lift && d.lift.u);
     if (!f) return [];
@@ -2371,21 +2378,27 @@
       s.items.forEach(function (it) {
         var v = actVal_(d, it.id);
         if (!v || !v.bad) return;
-        // формат как на бумаге: «узел — что сделать», без кодов пунктов чек-листа
-        var t = it.node || "";
-        if (v.k === "check") t = t + (v.note ? " — " + v.note : "");
-        else if (v.k === "floors") t = t + " (этажи: " + (d.results[it.id].v || "") + ")" + (v.note ? " — " + v.note : "");
-        else t = t + " — " + v.t + (v.note ? " (" + v.note + ")" : "");
-        out.push(t);
+        var name = it.node || "", text = "";
+        if (v.k === "check") {
+          var lower = name.toLowerCase(), replacement = "";
+          if (lower.indexOf("контактор") >= 0) replacement = "Протяжка клемм";
+          else if (lower.indexOf("маслен") >= 0 || lower.indexOf("маслён") >= 0) replacement = "Долить масла";
+          else if (lower.indexOf("груз противовеса") >= 0) replacement = "Закрепить";
+          text = name + ": " + (v.note || replacement || "Требуется устранение");
+        } else if (v.k === "floors") {
+          text = name + ": этажи " + ((d.results[it.id] || {}).v || "") + (v.note ? " (" + v.note + ")" : "");
+        } else {
+          var raw = (d.results[it.id] || {}).v || "";
+          text = name + ": " + raw + (v.note ? " (" + v.note + ")" : "");
+        }
+        out.push(text);
       });
     });
     var sc = d.sectionComments || {};
     Object.keys(sc).forEach(function (k) {
-      var text = String(sc[k] || "").trim();
-      if (text) out.push(text);
+      if (String(sc[k] || "").trim()) out = out.concat(commissionCommentRowsLocal_("Комментарий " + k, sc[k]));
     });
-    var c = String(d.comment || "").trim();
-    if (c) out.push(c);
+    if (String(d.comment || "").trim()) out = out.concat(commissionCommentRowsLocal_("Общий комментарий", d.comment));
     return out;
   }
 
@@ -2421,10 +2434,10 @@
       '<th class="fix">Отметка об устранении</th></tr>' + rows + '</table>' +
       '<div class="signBlock"><p class="signh">Подписи:</p>' +
       '<table class="sgn">' +
-      '<tr><td class="who">Представитель<br>монтажной<br>организации</td><td class="sig"><div class="ln"></div><div class="cap">(подпись, Ф.И.О.)</div></td></tr>' +
-      '<tr><td class="who">Представитель специализированной организации<br>по техническому обслуживанию</td><td class="sig"><div class="ln"></div><div class="cap">(подпись, Ф.И.О.)</div></td></tr>' +
-      '<tr><td class="who">Представитель эксплуатирующей<br>организации</td><td class="sig"><div class="ln"></div><div class="cap">(подпись, Ф.И.О.)</div></td></tr>' +
-      '<tr><td class="who">Представитель застройщика</td><td class="sig"><div class="ln"></div><div class="cap">(подпись, Ф.И.О.)</div></td></tr>' +
+      '<tr><td class="sigcell"><div class="who">Представитель монтажной организации</div><div class="ln"></div><div class="cap">(подпись, Ф.И.О.)</div></td>' +
+      '<td class="sigcell"><div class="who">Представитель специализированной организации по техническому обслуживанию</div><div class="ln"></div><div class="cap">(подпись, Ф.И.О.)</div></td></tr>' +
+      '<tr><td class="sigcell"><div class="who">Представитель эксплуатирующей организации</div><div class="ln"></div><div class="cap">(подпись, Ф.И.О.)</div></td>' +
+      '<td class="sigcell"><div class="who">Представитель застройщика</div><div class="ln"></div><div class="cap">(подпись, Ф.И.О.)</div></td></tr>' +
       '</table></div></div>';
     var css = '<style>@page{size:A4;margin:19.4mm 15mm 4.9mm 7.5mm}' +
       'body{margin:0;padding:0}.commissionDoc{width:210mm;box-sizing:border-box;margin:0 auto;padding:19.4mm 15mm 4.9mm 7.5mm;background:#fff;font:12pt/1.15 "Times New Roman",Times,serif;color:#000}' +
@@ -2444,11 +2457,10 @@
       '.commissionDoc .cm tr{height:4.2mm}.commissionDoc .liftRow td{height:4.2mm}.commissionDoc .liftRow td.c{font-weight:700}' +
       '.commissionDoc .signBlock{break-inside:avoid;page-break-inside:avoid;margin:9mm 0 0 7.5mm}' +
       '.commissionDoc p.signh{margin:0 0 4mm;font-size:11.5pt;font-weight:700;font-style:italic}' +
-      '.commissionDoc table.sgn{table-layout:fixed}.commissionDoc table.sgn td.who{width:56%;font-size:10.5pt;font-weight:700;' +
-      'font-style:italic;line-height:1.12;vertical-align:bottom;padding:0 0 6mm}' +
-      '.commissionDoc table.sgn td.sig{vertical-align:bottom;padding:0 0 6mm 14mm}' +
-      '.commissionDoc table.sgn .ln{border-bottom:1px solid #000;height:5mm}' +
-      '.commissionDoc table.sgn .cap{margin-top:1mm;text-align:center;font-size:7pt;font-weight:400;font-style:normal;line-height:1.1}' +
+      '.commissionDoc table.sgn{table-layout:fixed;width:100%}.commissionDoc table.sgn td.sigcell{width:50%;vertical-align:top;padding:0 7mm 7mm 0}' +
+      '.commissionDoc table.sgn .who{min-height:11mm;font-size:10.5pt;font-weight:700;font-style:italic;line-height:1.12}' +
+      '.commissionDoc table.sgn .ln{border-bottom:1px solid #000;height:5mm;width:80%}' +
+      '.commissionDoc table.sgn .cap{margin-top:1mm;text-align:left;font-size:8pt;font-weight:400;font-style:normal;line-height:1.1}' +
       '@media print{.noprint{display:none}}</style>';
     printHTML('<style>' + css.replace(/<\/?style>/g, "") + '</style>' + inner, "akt-kommissionnogo-osmotra.pdf");
   }
@@ -2549,10 +2561,9 @@
   }
 
   /* ACT_FORM:BEGIN — бланк вынесен в act_form.js (генерируется tools/gen_act_form.py) */
- // ---- «Акт приёмки»: ТОЧНАЯ КОПИЯ бланка «Форма_Передаточного_акта.pdf» ----
-  // Подложка — сам бланк (2 страницы A4, 300 dpi). Значения печатаются поверх, на тех же линиях и в тех же
-  // клетках: координаты сняты с оригинального PDF (ACT_FORM.g). Пункты чек-листа, которых в бланке нет,
-  // и ведомость замечаний вынесены на страницу-приложение — бланк остаётся таким, как на бумаге.
+  // ---- «Акт приёмки»: действующий трёхстраничный DOCX-бланк ----
+  // Подложки — три страницы A4. Значения печатаются поверх, на тех же линиях и в тех же
+  // клетках: координаты соответствуют действующему шаблону (ACT_FORM.g).
   var ACT_UNITS_ = { "А3.2": " %", "А3.3": " мм", "А3.8": " мм" };
   var ACT_MONTHS_ = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
   var ACT_TEXT_SIZE_ = 10, ACT_NOTE_SIZE_ = 9.5;
@@ -2601,155 +2612,73 @@
     if (v === undefined || v === null || String(v) === "") return null;
     var k = it ? itemType(it) : "state";
     if (k === "check") return v === "bad"
-      // в бланке — не общее слово, а само замечание из чек-листа (примечание);
-      // если примечание пусто — остаётся «ЗАМЕЧАНИЕ»
       ? { k: k, t: note || "ЗАМЕЧАНИЕ", full: note || "ЗАМЕЧАНИЕ", bad: true, note: note }
-      : { k: k, t: "исправно", full: "исправно", bad: false, note: note };
+      : { k: k, t: note || "+", full: note || "+", bad: false, note: note };
     if (k === "state") {
       var bad = !!(it && it.options && v !== it.options[0]);
-      return { k: k, t: String(v), full: String(v) + (note ? " (" + note + ")" : ""), bad: bad, note: note };
+      var stateText = !bad && !note ? "+" : String(v) + (note ? " (" + note + ")" : "");
+      return { k: k, t: stateText, full: stateText, bad: bad, note: note };
     }
-    if (k === "count") return { k: k, t: String(v) + (ACT_UNITS_[id] || ""), full: String(v) + (ACT_UNITS_[id] || ""), bad: false, note: note };
+    if (k === "count") {
+      var countText = String(v) + (ACT_UNITS_[id] || "") + (note ? " (" + note + ")" : "");
+      return { k: k, t: countText, full: countText, bad: false, note: note };
+    }
     return { k: k, t: String(v), full: "этажи: " + v, bad: true, note: note };      // floors
   }
 
   function actBuild_(d, f) {
-    var G = ACT_FORM.g, FL = G.floors;
-    var onForm = {}, vals = {};
-    G.f.forEach(function (x) { onForm[x.id] = x; });
-    G.grids.forEach(function (g) { g.ids.forEach(function (i) { if (i) onForm[i] = true; }); });
-    var defects = [], extras = [], notes = [];
-    f.sections.forEach(function (s) {
-      s.items.forEach(function (it) {
-        var v = actVal_(d, it.id);
-        if (!v) return;
-        vals[it.id] = v;
-        var lab = it.node || (onForm[it.id] && onForm[it.id].lab) || it.id;
-        v.lab = lab;
-        if (v.bad) defects.push({ id: it.id, lab: lab, text: v.full, sec: String(it.id).slice(0, 2) });
-        else if (v.note) notes.push({ id: it.id, lab: lab, text: v.note });
-        if (!onForm[it.id]) extras.push({ id: it.id, lab: it.node, v: v });
-      });
-    });
-    var p1 = [], p2 = [];
-    function T(arr, x, y, str, size, bold) {
-      arr.push('<text x="' + x + '" y="' + y + '" font-size="' + (Math.round(size * 100) / 100) + '"' + (bold ? ' font-weight="700"' : "") + ">" + esc(str) + "</text>");
-    }
-    function fieldText(arr, fld, str, bold) {
-      if (str === "" || str == null) return null;
-      T(arr, fld.x + (fld.w < 30 ? 1.5 : 3), fld.b, str, ACT_TEXT_SIZE_, bold);
-      return { t: str, s: ACT_TEXT_SIZE_, cut: false };
-    }
-    // Значения чек-листа печатаются ОДНИМ кеглем (без уменьшения).
-    // Если значение не влезает в свою графу — возвращаем false, и оно уходит
-    // в свободные строки внизу раздела в формате «узел – что сделать».
-    function fieldTextFixed(arr, fld, str, bold) {
-      if (str === "" || str == null) return true;
-      var size = ACT_TEXT_SIZE_;
-      if (actTw_(str, bold) * size > fld.w - 7) return false;
-      T(arr, fld.x + (fld.w < 30 ? 1.5 : 5), fld.b, str, size, bold);
-      return true;
-    }
-    // Цифры даты крупнее и без автоматического сжатия: особенно важно для двух цифр года.
-    function fieldTextDate(arr, fld, str) {
+    var G = ACT_FORM.g, pages = [[], [], []];
+    function T(page, x, y, str, size, bold, underline, center) {
       if (str === "" || str == null) return;
-      T(arr, fld.x + 1.5, fld.b, str, 12, false);
+      pages[page - 1].push('<text x="' + x + '" y="' + y + '" font-size="' + (Math.round(size * 100) / 100) + '"' +
+        (bold ? ' font-weight="700"' : '') + (underline ? ' text-decoration="underline"' : '') +
+        (center ? ' text-anchor="middle"' : '') + '>' + esc(str) + '</text>');
     }
-    // шапка
-    var dp = String(d.date || "").split("-"), H = G.hdr;
+    function field(fld, str, bad, baseSize) {
+      if (!fld || str === "" || str == null) return;
+      var size = baseSize || (bad ? 9 : 10), fitted = actFit_(str, fld.w - 3, size, !!bad);
+      T(fld.page, fld.x + 1, fld.b, str, fitted.s, !!bad, true, false);
+    }
+    var dp = String(d.date || '').split('-'), H = G.hdr;
     if (dp.length === 3) {
-      fieldTextDate(p1, H.day, String(+dp[2]));
-      fieldText(p1, H.mon, ACT_MONTHS_[+dp[1] - 1] || "");
-      fieldTextDate(p1, H.yr, dp[0].indexOf("202") === 0 ? dp[0].slice(3) : dp[0].slice(-2));
+      field(H.day, String(+dp[2]), false, 10);
+      field(H.mon, ACT_MONTHS_[+dp[1] - 1] || '', false, 10);
+      field(H.yr, dp[0].slice(2), false, 10);
     }
-    fieldText(p1, H.num, (d.lift && d.lift.n) || "");
-    fieldText(p1, H.org, settings().org || "");
-    fieldText(p1, H.addr, ((d.lift && d.lift.a) || "") + (d.lift && d.lift.p ? ", парадная " + d.lift.p : ""));
-    fieldText(p1, H.model, d.model || "");
-    // Подписи пунктов на бланке СТЁРТЫ (фон зачищен) — рисуем названия из чек-листа
-    // на тех же местах, с кеглем/насыщенностью оригинала (геометрия g.f[].lg / g.lbl).
-    // Подписи на бланке = короткие названия из файла «Названия пунктов — бланк акта приёмки»
-    // (приходят в пункте как it.lab); полные названия it.node — только в замечаниях/приложении.
-    var names = {};
-    f.sections.forEach(function (s) { s.items.forEach(function (it) { names[it.id] = it.lab || it.node; }); });
-    function labelText(arr, geo, str, rightBound) {
-      if (!geo || str == null || str === "") return;
-      var w = rightBound - geo.x - 2;
-      if (w < 10) return;
-      var size = geo.s || 10, lines = [str];
-      if (actTw_(str, !!geo.bold) * size > w) {
-        size = Math.max(6.5, w / actTw_(str, !!geo.bold));
-        // в оригинале длинные подписи занимают две строки: переносим по словам
-        if (actTw_(str, !!geo.bold) * 6.5 > w + 0.01) {
-          var words = String(str).split(/\s+/), two = null;
-          for (var i = 1; i < words.length; i++) {
-            var l1 = words.slice(0, i).join(" "), l2 = words.slice(i).join(" ");
-            if (actTw_(l1, !!geo.bold) * 6.5 <= w && actTw_(l2, !!geo.bold) * 6.5 <= w) { two = [l1, l2]; break; }
-          }
-          if (!two) { // не нашли разбиение, где обе строки влезают — делим пополам и ужимаем
-            var half = Math.ceil(words.length / 2);
-            two = [words.slice(0, half).join(" "), words.slice(half).join(" ") || " "];
-          }
-          size = Math.max(4, Math.min(geo.s || 10, w / Math.max(actTw_(two[0], !!geo.bold), actTw_(two[1], !!geo.bold))));
-          lines = two;
-        }
-      }
-      if (lines.length === 1) T(arr, geo.x, geo.b, lines[0], size, !!geo.bold);
-      else { T(arr, geo.x, geo.b, lines[1], size, !!geo.bold); T(arr, geo.x, geo.b - size * 1.15, lines[0], size, !!geo.bold); }
-    }
-    G.f.forEach(function (fld) { labelText(p1, fld.lg, names[fld.id], fld.x); });
-    G.grids.forEach(function (gr) {
-      gr.ids.forEach(function (id) {
-        if (!id || !G.lbl || !G.lbl[id]) return;
-        labelText(p2, G.lbl[id], names[id], gr.xs[1] - 1);
-      });
-    });
-    // поля бланка: одним размером; не влезло — в нижний блок раздела
-    var overflow = [];
+    field(H.num, (d.lift && d.lift.n) || '', false, 10);
+    field(H.org, settings().org || '', false, 9);
+    field(H.addr, ((d.lift && d.lift.a) || '') + (d.lift && d.lift.p ? ', парадная ' + d.lift.p : ''), false, 9);
+    field(H.model, d.model || '', false, 9);
+
     G.f.forEach(function (fld) {
-      var v = vals[fld.id];
-      if (!v) return;
-      if (!fieldTextFixed(p1, fld, v.t, v.bad) && !v.bad) {
-        overflow.push({ sec: String(fld.id).slice(0, 2), text: v.lab + " – " + v.full });
-      }
+      var v = actVal_(d, fld.id);
+      if (v) field(fld, v.full, v.bad, v.bad ? 9 : 10);
     });
-    // Свободные строки внизу раздела: комментарий, все замечания раздела и всё,
-    // что не вместилось в графы — в формате «узел – что сделать»
-    // (напр. «Контакторы – требуется протяжка»), без кодов пунктов.
-    var sc = d.sectionComments || {};
-    ["А1", "А2", "А3", "А4"].forEach(function (sec) {
-      var lines = G.free[sec], entries = [];
-      if (sc[sec] && String(sc[sec]).trim()) entries.push(String(sc[sec]).trim());
-      defects.filter(function (x) { return x.sec === sec; }).forEach(function (x) {
-        entries.push(x.lab + " – " + x.text);
-      });
-      overflow.filter(function (x) { return x.sec === sec; }).forEach(function (x) {
-        entries.push(x.text);
-      });
-      var fitted = actFitLines_(entries, lines[0].w - 4, lines.length);
-      fitted.lines.forEach(function (tx, i) { T(lines[i].p === 2 ? p2 : p1, lines[i].x + 2, lines[i].b, tx, fitted.size); });
-    });
-    // поэтажные таблицы
-    G.grids.forEach(function (g) {
-      g.ids.forEach(function (id, r) {
-        var v = id && vals[id];
-        if (!v) return;
-        var marks = {};
-        String(d.results[id].v || "").split(/[,\s;]+/).forEach(function (x) { if (x.trim()) marks[x.trim()] = 1; });
-        FL.forEach(function (fl, c) {
-          if (!marks[fl]) return;
-          var x0 = g.xs[c + 1], x1 = g.xs[c + 2], y0 = g.ys[r + 1], y1 = g.ys[r + 2];
-          var pad = Math.min(x1 - x0, y1 - y0) * 0.27;
-          p2.push('<path d="M' + (x0 + pad) + " " + (y0 + pad) + "L" + (x1 - pad) + " " + (y1 - pad) + "M" + (x1 - pad) + " " + (y0 + pad) + "L" + (x0 + pad) + " " + (y1 - pad) + '" stroke="#000" stroke-width="1.1" fill="none"/>');
+
+    G.grids.forEach(function (grid) {
+      grid.ids.forEach(function (id, r) {
+        var result = (d.results || {})[id];
+        if (!result || !result.v) return;
+        var marks = floorSet_(result.v);
+        FLOORS_.forEach(function (floor, c) {
+          if (!marks[floor]) return;
+          var pt = grid.points[r][c];
+          T(grid.page, pt.x, pt.y, '×', 8, false, false, true);
         });
       });
     });
-    // «Отдельные замечания» — полный текст на бланке, без сокращений.
-    var rem = G.rem, rtexts = [];
-    if (d.comment) rtexts.push(String(d.comment));
-    var remFit = actFitLines_(rtexts, rem[0].w - 4, rem.length);
-    remFit.lines.forEach(function (tx, i) { T(p2, rem[i].x + 2, rem[i].b, tx, remFit.size); });
-    return { p1: p1.join(""), p2: p2.join("") };
+
+    var comment = String(d.comment || '').trim();
+    if (comment) {
+      var rem = G.rem, size = 9, lines;
+      do {
+        lines = actWrap_(comment, rem.w - 4, size, true);
+        if (lines.length <= rem.maxLines) break;
+        size = Math.max(3, Math.round((size - 0.5) * 100) / 100);
+      } while (size > 3);
+      lines.forEach(function (text, i) { T(rem.page, rem.x, rem.b + i * rem.line, text, size, true, true, false); });
+    }
+    return { pages: pages.map(function (x) { return x.join(''); }), p1: pages[0].join(''), p2: pages[1].join(''), p3: pages[2].join('') };
   }
 
   // ---------- НОВЫЙ PDF АКТА ДЛЯ ОТПРАВКИ НА СЕРВЕР ----------
@@ -2823,8 +2752,8 @@
     function page(bg, svg) {
       return '<div class="actpg"><img alt="" src="' + bg + '"><svg viewBox="0 0 ' + G.W + " " + G.H + '" xmlns="http://www.w3.org/2000/svg">' + svg + "</svg></div>";
     }
-    // Только две страницы фирменного бланка. Отдельного приложения нет.
-    printHTML(css + page(ACT_FORM.bg[0], b.p1) + page(ACT_FORM.bg[1], b.p2));
+    // Действующий трёхстраничный бланк, без старого PDF и отдельного приложения.
+    printHTML(css + b.pages.map(function (svg, i) { return page(ACT_FORM.bg[i], svg); }).join(''));
   }
 
   // Карточка лифта из сводки для печати: общие сведения + компактные модули
@@ -2864,7 +2793,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.8.5";
+  var APP_BUILD = "2.8.6";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
