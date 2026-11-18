@@ -1,4 +1,6 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.8.1
+/* Журнал ТО лифтов — офлайн PWA, v2.8.2
+   v2.8.2: обновление PWA применяется при смене service worker и после сообщения
+   о готовой оболочке; добавлена защита от циклической перезагрузки.
    v2.8.1: при отправке акта приёмки приложение создаёт новый двухстраничный PDF
    тем же кодом, что печать, и передаёт его на сервер с меткой app-new-blank.
    v2.8.0: акт приёмки — подписи пунктов на печатном бланке берутся из файла
@@ -2034,7 +2036,7 @@
         ? '<p class="hint">Приёмник данных задан в комплекте приложения и обновляется автоматически вместе с ним.<br><span style="word-break:break-all">' + esc(window.APP_ENDPOINT) + "</span></p>"
         : '<p class="hint">Ссылка Google Apps Script (…/exec) — берётся в «Управление развертываниями».</p>' +
           '<input type="url" id="sEndpoint" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(s.endpoint) + '">') + "</div>" +
-      '<div class="card"><h2>Справка</h2><p class="hint">Версия 2.7 · видов ТО: ' + DATA.forms.length +
+      '<div class="card"><h2>Справка</h2><p class="hint">Версия 2.8.2 · видов ТО: ' + DATA.forms.length +
       " · лифтов в справочнике: " + DATA.lifts.length + ".<br>Осмотры хранятся в телефоне до отправки.<br>" +
       'Сборка: <b id="appVer">' + esc(window.__appVer || "—") + '</b></p>' +
       '<div style="margin-top:10px"><button type="button" class="miniBtn" id="sUpd">Проверить обновления</button></div></div>' +
@@ -2855,12 +2857,23 @@
   }
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
-  var pendingUpdate = false;
-  function applyUpdate() { location.reload(); }
+  var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
+  var APP_BUILD = "2.8.2";
+  function applyUpdate() {
+    if (updateReloading) return;
+    // Некоторые браузеры шлют update и controllerchange почти одновременно.
+    // Разрешаем только одну перезагрузку за 10 секунд, чтобы не получить цикл.
+    var now = Date.now(), last = 0;
+    try { last = Number(sessionStorage.getItem("to_update_reload") || 0); } catch (e) {}
+    if (now - last < 10000) return;
+    updateReloading = true;
+    try { sessionStorage.setItem("to_update_reload", String(now)); } catch (e2) {}
+    location.reload();
+  }
   function setAppVer_(ver) {
-    window.__appVer = ver || "";
+    window.__appVer = APP_BUILD + (ver ? " · " + ver : "");
     var el = document.getElementById("appVer");
-    if (el) el.textContent = ver || "—";
+    if (el) el.textContent = window.__appVer;
   }
   function requestAppVer_() {
     if (!("serviceWorker" in navigator)) return;
@@ -2880,10 +2893,11 @@
     b.querySelector("button").onclick = applyUpdate;
     document.body.appendChild(b);
   }
-  // новая версия готова: на главном экране (ничего не заполняется) — обновляемся сразу, иначе — плашка
+  // Пакет уже скачан целиком и атомарно переключён в lift-meta/current.
+  // Перезагружаем страницу на любом экране: черновики и введённые осмотры хранятся отдельно.
   function onUpdateReady() {
     pendingUpdate = true;
-    if (state.view === "home" || state.view === "login") applyUpdate(); else showUpdateBar();
+    applyUpdate();
   }
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", function (e) {
@@ -2899,6 +2913,10 @@
     navigator.serviceWorker.addEventListener("controllerchange", function () {
       var c = navigator.serviceWorker.controller;
       if (c) c.postMessage({ type: "ver" });
+      // При первой установке страница и так только что загружена с сервера.
+      // При СМЕНЕ воркера старый JS уже в памяти — обязательно загружаем новую оболочку.
+      if (hadSwController) applyUpdate();
+      hadSwController = true;
     });
     navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then(function (reg) {
       function check() {
@@ -2914,6 +2932,8 @@
       });
       setInterval(check, 15 * 60 * 1000);
       navigator.serviceWorker.ready.then(function () {
+        // Сначала заставляем браузер сверить именно sw.js, затем проверяем всю оболочку.
+        reg.update().catch(function () {});
         var c = navigator.serviceWorker.controller;
         if (c) { c.postMessage({ type: "ver" }); c.postMessage({ type: "check" }); }
       });
