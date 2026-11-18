@@ -1,4 +1,12 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.9.0
+/* Журнал ТО лифтов — офлайн PWA, v2.11.0
+   v2.11.0: обязательная этажность и поэтажные маршруты крыши/дверей и нормальной работы;
+   автосохранение, следующий этаж, сворачивание и продолжение с плавающей плашки.
+   v2.10.1: акты комиссионного осмотра из папки Drive «Акты осмотров»;
+   доступ администратора и механиков соответствующего участка.
+   v2.10.0: общий архив актов приёмки по адресам с редактируемой копией;
+   норма в чек-листе подсвечивается зелёным; сводка осмотров — только администратору.
+   v2.9.1: ровные линии таблиц, исправленные поля купе и «Компенс. цепь»;
+   отметки чек-листа центрируются на строках акта приёмки.
    v2.9.0: отдельные замечания через «+ добавить замечание»; вывод под блоками
    акта приёмки через «;» и отдельными строками в акте комиссионного осмотра.
    v2.8.8: акт приёмки на двух страницах без пустых листов Safari; ok → +, bad → --;
@@ -229,6 +237,7 @@
       lift: renderLift,
       actheader: renderActHeader,
       checklist: renderChecklist,
+      floors: renderFloorInspection,
       outbox: renderOutbox,
       svodka: renderSvodka,
       docs: renderDocs,
@@ -236,6 +245,9 @@
       docadd: renderDocAdd,
       liftcard: renderLiftCard,
       inspections: renderInspections,
+      inspsummary: renderInspectionSummary,
+      actarchive: renderActArchive,
+      commissionacts: renderCommissionActs,
       settings: renderSettings
     })[view](params || {});
     updateNet();
@@ -329,7 +341,7 @@
       '<button class="btn" id="bSvodka">Сводка<small>Состояние лифтов из таблицы' + (isAdmin() ? "" : " (ваш участок)") + "</small></button>" +
       '<button class="btn" id="bDocs">Документация<small>Библиотека: РЭ, схемы, паспорта, ГОСТы · можно пополнять</small></button>' +
       '<button class="btn primary" id="bAI">Помощь ИИ<small>Вопрос по документации · чтение файлов · поиск в интернете</small></button>';
-    if (isAdmin()) html += '<button class="btn" id="bInsp">Осмотры<small>Все осмотры: даты, исполнители, время начала и конца ТО</small></button>';
+    if (acc) html += '<button class="btn" id="bInsp">Осмотры<small>Архив актов приёмки по адресам' + (isAdmin() ? ' · сводка осмотров' : '') + '</small></button>';
     html += '<button class="btn" id="bOutbox">Исходящие записи' + (q ? " (" + q + ")" : "") + "<small>Осмотры, ожидающие отправки</small></button>" +
       '<button class="btn" id="bSet">Настройки<small>Подключение таблицы, организация</small></button>';
     screenEl.innerHTML = html;
@@ -337,7 +349,7 @@
     document.getElementById("bSvodka").onclick = function () { state.stack = []; go("svodka"); };
     document.getElementById("bDocs").onclick = function () { state.stack = []; go("docs"); };
     document.getElementById("bAI").onclick = function () { state.stack = []; go("assistant"); };
-    if (isAdmin()) document.getElementById("bInsp").onclick = function () { state.stack = []; go("inspections"); };
+    if (acc) document.getElementById("bInsp").onclick = function () { state.stack = []; go("inspections"); };
     document.getElementById("bOutbox").onclick = function () { state.stack = []; go("outbox"); };
     document.getElementById("bSet").onclick = function () { state.stack = []; go("settings"); };
     document.getElementById("bChange").onclick = function () { state.stack = []; go("login"); };
@@ -578,6 +590,53 @@
     return { general: general, sections: sections };
   }
   function legacyRemarks_(list) { return remarkList_(list).join("; "); }
+  var FLOOR_MODES_ = {
+    roof: { title:"Двери шахты / крыша кабины", short:"Крыша кабины", ids:["А5.1","А5.2","А5.3","А5.4","А5.5","А5.6","А5.7","А5.8","А5.9","А5.10","А5.11","А5.12","А5.13","А5.14","А5.15","А5.16","А5.17","А5.21","А5.23","А5.24","А5.25"] },
+    normal: { title:"Проверка в нормальной работе", short:"Нормальная работа", ids:["А5.18","А5.19","А5.20","А5.22"] }
+  };
+  function floorDataOf_(d) {
+    var fd = d && d.floorData ? d.floorData : {};
+    fd.top = String(fd.top != null ? fd.top : (d && d.floorTop) || "");
+    fd.bottom = String(fd.bottom != null ? fd.bottom : (d && d.floorBottom) != null ? d.floorBottom : "1");
+    fd.routes = fd.routes || {};
+    Object.keys(FLOOR_MODES_).forEach(function (m) {
+      fd.routes[m] = fd.routes[m] || { current:"", floors:{} };
+      fd.routes[m].floors = fd.routes[m].floors || {};
+    });
+    return fd;
+  }
+  function floorList_(fd) {
+    var top = Number(fd.top), bottom = Number(fd.bottom == "" ? 1 : fd.bottom), out = [];
+    if (!Number.isInteger(top) || !Number.isInteger(bottom) || top < 1 || bottom > top || bottom === 0) return out;
+    for (var n = top; n >= 1; n--) out.push(String(n));
+    for (var b = -1; b >= bottom; b--) out.push(String(b));
+    return out;
+  }
+  function floorItemValue_(r) { return r && typeof r === "object" ? r : { v:r || "", note:"" }; }
+  function compileFloorResults_(d) {
+    var fd = floorDataOf_(d), results = d.results || {};
+    Object.keys(FLOOR_MODES_).forEach(function (mode) {
+      var floors = fd.routes[mode].floors || {};
+      FLOOR_MODES_[mode].ids.forEach(function (id) {
+        var badFloors = [], notes = [];
+        floorList_(fd).forEach(function (floor) {
+          var r = floorItemValue_(floors[floor] && floors[floor][id]);
+          if (r.v === "bad") { badFloors.push(floor); if (r.note) notes.push(floor + ": " + r.note); }
+        });
+        if (badFloors.length) results[id] = { v:badFloors.join(", "), note:notes.join("; ") };
+        else if (Object.keys(floors).length) delete results[id];
+      });
+    });
+    return results;
+  }
+  function floorRouteProgress_(fd, mode) {
+    var floors = floorList_(fd), data = fd.routes[mode], done = 0;
+    floors.forEach(function (floor) {
+      var values = data.floors[floor] || {};
+      if (FLOOR_MODES_[mode].ids.every(function (id) { return floorItemValue_(values[id]).v !== ""; })) done++;
+    });
+    return { done:done, total:floors.length };
+  }
   function remarkEditorHtml_(key, label, list) {
     return '<div class="remarkEditor" data-remark-box="' + esc(key) + '" style="margin:12px 14px 6px;padding-top:10px;border-top:1px solid var(--line)">' +
       '<label style="margin-top:0;font-size:.9rem;color:var(--muted)">' + esc(label) + '</label>' +
@@ -605,6 +664,8 @@
     var model = (draft && draft.model) || l.model || "";
     var startedAt = (draft && draft.startedAt) || new Date().toISOString();
     var editId = (draft && draft.editId) || null;
+    var floorData = floorDataOf_(draft);
+    compileFloorResults_({ floorData:floorData, results:results });
 
     // обязательные к отметке пункты: check и state (count/floors — необязательны)
     var required = [];
@@ -621,16 +682,20 @@
       '<div class="row"><div><h2>' + esc(l.a) + '</h2>' +
       '<p class="hint">Лифт № ' + esc(l.n) + ' · ' + esc(l.u) +
       (model ? " · " + esc(model) : "") + "</p></div></div>" +
-      '<label>Дата проведения</label><input type="date" id="cDate" value="' + esc(date) + '"></div>' +
+      '<label>Дата проведения</label><input type="date" id="cDate" value="' + esc(date) + '">' +
+      (f.header ? '<div class="row" style="align-items:flex-end;gap:10px"><div style="flex:1"><label>Верхний этаж *</label><input type="number" inputmode="numeric" id="floorTop" min="1" step="1" value="' + esc(floorData.top) + '" placeholder="например, 19"></div>' +
+        '<div style="flex:1"><label>Нижний этаж *</label><input type="number" inputmode="numeric" id="floorBottom" step="1" value="' + esc(floorData.bottom) + '" placeholder="1, -1, -2"></div></div>' +
+        '<p class="hint">Маршрут формируется сверху вниз, без нулевого этажа.</p>' : '') + '</div>' +
       '<div class="progress" id="prog"></div>';
 
     // Акт приёмки — строго в порядке печатной формы (СУ → Шахта → Приямок → Купе → Двери шахты),
     // без перегруппировки по модулям; остальные виды ТО — по модулям, как раньше
     var modules = f.header
       ? f.sections.map(function (s, i) {
-          return { key: "sec" + i, name: s.name,
-            sections: [{ name: "", items: s.items }],
-            ids: s.items.map(function (it) { return it.id; }) };
+          var floorSection = f.header && i === 4;
+          return { key: "sec" + i, name: s.name, floorSection:floorSection,
+            sections: [{ name: "", items: floorSection ? [] : s.items }],
+            ids: floorSection ? [] : s.items.map(function (it) { return it.id; }) };
         })
       : checklistModules(f);
     html += '<div class="clList">' +
@@ -645,7 +710,8 @@
         s.items.forEach(function (it) {
           var t = itemType(it);
           var r = val(it.id);
-          html += '<div class="check' + (required.indexOf(it.id) >= 0 && r === "" ? " miss" : "") + '" data-id="' + esc(it.id) + '" data-t="' + t + '"><div class="txt">' +
+          var good = (t === "check" && r === "ok") || (t === "state" && r !== "" && r === it.options[0]);
+          html += '<div class="check' + (required.indexOf(it.id) >= 0 && r === "" ? " miss" : "") + (good ? " good" : "") + '" data-id="' + esc(it.id) + '" data-t="' + t + '"><div class="txt">' +
             '<div class="works">' + esc(it.id) + ". " + esc(it.node) + " — " + esc(it.works) + "</div>" +
             (it.req ? '<div class="req">Норма: ' + esc(it.req) + "</div>" : "");
 
@@ -679,6 +745,12 @@
           html += "</div>";
         });
       });
+      if (m.floorSection) {
+        var pr = floorRouteProgress_(floorData, "roof"), pn = floorRouteProgress_(floorData, "normal");
+        html += '<div style="padding:14px"><p class="hint" style="margin-top:0">Поэтажный осмотр: от верхнего этажа к нижнему. Заполнение сохраняется автоматически.</p>' +
+          '<button class="btn primary" id="routeRoof">Двери шахты / крыша кабины<small>Прогресс: ' + pr.done + ' из ' + pr.total + ' этажей</small></button>' +
+          '<button class="btn" id="routeNormal">Проверка в нормальной работе<small>Точность остановки, кнопки и индикаторы · ' + pn.done + ' из ' + pn.total + '</small></button></div>';
+      }
       // Отдельные замечания к блоку — только для акта приёмки.
       if (f.header) {
         var secKey = "А" + (mi + 1);
@@ -691,6 +763,14 @@
     html += '<div class="card">' + remarkEditorHtml_("general", "Общие замечания", remarks) + '</div>' +
       '<button class="btn primary" id="bSave" style="margin-top:14px">Сохранить осмотр</button>' +
       '<button class="btn" id="bPrint">Печать<small>акта осмотра по печатной форме, с ведомостью замечаний</small></button>';
+    if (f.header) {
+      var activeRoutes = Object.keys(FLOOR_MODES_).filter(function (mode) {
+        var p = floorRouteProgress_(floorData, mode); return p.done > 0 && p.done < p.total;
+      });
+      if (activeRoutes.length) html += '<div class="floorResume"><b>Поэтажный осмотр не завершён</b><div class="row" style="margin-top:8px">' + activeRoutes.map(function (mode) {
+        var p = floorRouteProgress_(floorData, mode); return '<button class="miniBtn" data-resume="' + mode + '">' + esc(FLOOR_MODES_[mode].short) + ' · ' + p.done + '/' + p.total + '</button>';
+      }).join("") + '</div></div><div style="height:86px"></div>';
+    }
     screenEl.innerHTML = html;
 
     function refreshProg() {
@@ -744,6 +824,7 @@
             el.querySelector(".note").classList.toggle("hidden", next !== "bad");
             if (next !== "bad") el.querySelector(".note input").value = "";
             el.classList.toggle("miss", next === "");
+            el.classList.toggle("good", next === "ok");
             saveCurrent();
             refreshProg();
           };
@@ -757,11 +838,19 @@
             el.classList.toggle("miss", sv === "" || (sv === "__own__" && !el.querySelector(".own .ownV").value.trim()));
           }
           readItem(el);
+          if (t === "state") {
+            var item = findItem(f.type, id, l.u);
+            el.classList.toggle("good", !!item && val(id) === item.options[0]);
+          }
           saveCurrent();
           refreshProg();
         });
         el.addEventListener("change", function () {
           readItem(el);
+          if (t === "state") {
+            var item = findItem(f.type, id, l.u);
+            el.classList.toggle("good", !!item && val(id) === item.options[0]);
+          }
           saveCurrent();
           refreshProg();
         });
@@ -790,10 +879,30 @@
         date: document.getElementById("cDate").value,
         results: results, comment: legacyRemarks_(remarks), remarks: remarkList_(remarks),
         sectionComments: collectSectionComments(), sectionRemarks: sectionRemarks,
-        startedAt: startedAt, editId: editId
+        startedAt: startedAt, editId: editId, floorData:floorData,
+        floorTop:floorData.top, floorBottom:floorData.bottom
       });
     }
     document.getElementById("cDate").addEventListener("change", saveCurrent);
+    function startFloorRoute(mode) {
+      var topEl = document.getElementById("floorTop"), bottomEl = document.getElementById("floorBottom");
+      floorData.top = topEl.value.trim(); floorData.bottom = bottomEl.value.trim();
+      if (!floorList_(floorData).length) { toast("Укажите корректные верхний и нижний этажи"); return; }
+      saveCurrent();
+      go("floors", { mode:mode });
+    }
+    if (f.header) {
+      ["floorTop", "floorBottom"].forEach(function (id) {
+        document.getElementById(id).addEventListener("input", function () {
+          floorData.top = document.getElementById("floorTop").value.trim();
+          floorData.bottom = document.getElementById("floorBottom").value.trim();
+          saveCurrent();
+        });
+      });
+      document.getElementById("routeRoof").onclick = function () { startFloorRoute("roof"); };
+      document.getElementById("routeNormal").onclick = function () { startFloorRoute("normal"); };
+      screenEl.querySelectorAll("[data-resume]").forEach(function (b) { b.onclick = function () { startFloorRoute(b.getAttribute("data-resume")); }; });
+    }
     screenEl.querySelectorAll("[data-remark-box]").forEach(function (box) {
       box.onclick = function (event) {
         var add = event.target.closest("[data-remark-add]");
@@ -818,6 +927,7 @@
     document.getElementById("bSave").onclick = function () {
       saveCurrent();
       var d = lsGet(DRAFT_KEY, null);
+      if (f.header && !floorList_(floorData).length) { toast("Заполните верхний и нижний этажи"); return; }
       if (done() < required.length) {
         if (!confirm("Не отмечено обязательных пунктов: " + (required.length - done()) +
             ". Неотмеченные уйдут в таблицу ПУСТЫМИ. Сохранить так?")) return;
@@ -831,6 +941,7 @@
         lift: l, model: model, date: d.date, results: d.results, comment: d.comment,
         remarks: d.remarks || remarkList_(d.comment), sectionComments: d.sectionComments || {},
         sectionRemarks: d.sectionRemarks || recordRemarks_(d).sections,
+        floorData:d.floorData || floorData, floorTop:d.floorTop || "", floorBottom:d.floorBottom || "",
         worker: (account() && account().name) || "",
         startedAt: startedAt, finishedAt: new Date().toISOString()
       };
@@ -853,6 +964,104 @@
         worker: (account() && account().name) || ""
       });
     };
+  }
+
+  function renderFloorInspection(params) {
+    var f = state.form, l = state.lift, mode = params.mode || "roof";
+    if (!f || !l || !FLOOR_MODES_[mode]) { render("checklist"); return; }
+    var d = lsGet(DRAFT_KEY, null) || {}, fd = floorDataOf_(d), floors = floorList_(fd);
+    if (!floors.length) { toast("Сначала укажите этажность"); render("checklist", { draft:d }); return; }
+    var route = fd.routes[mode], ids = FLOOR_MODES_[mode].ids;
+    function firstIncomplete() {
+      return floors.find(function (floor) {
+        var values = route.floors[floor] || {};
+        return ids.some(function (id) { return floorItemValue_(values[id]).v === ""; });
+      }) || floors[0];
+    }
+    var current = String(params.floor || route.current || firstIncomplete());
+    if (floors.indexOf(current) < 0) current = floors[0];
+    route.current = current;
+    route.floors[current] = route.floors[current] || {};
+    // Перенос старых списков «этажи с замечаниями» в поэтажный редактор — сразу всех этажей,
+    // чтобы последующая сборка results не потеряла замечания других этажей.
+    floors.forEach(function (floor) {
+      route.floors[floor] = route.floors[floor] || {};
+      if (Object.keys(route.floors[floor]).length) return;
+      ids.forEach(function (id) {
+        var old = d.results && d.results[id], value = old && old.v;
+        if (String(value || "").split(/[,;\s]+/).indexOf(floor) >= 0) route.floors[floor][id] = { v:"bad", note:(old && old.note) || "" };
+      });
+    });
+    function save() {
+      var latest = lsGet(DRAFT_KEY, null) || d;
+      latest.floorData = fd; latest.floorTop = fd.top; latest.floorBottom = fd.bottom;
+      latest.results = latest.results || {};
+      compileFloorResults_(latest);
+      lsSet(DRAFT_KEY, latest);
+      d = latest;
+    }
+    save();
+    var progress = floorRouteProgress_(fd, mode);
+    titleEl.textContent = FLOOR_MODES_[mode].title;
+    var html = '<div class="card"><div class="row"><div><h2>' + esc(current) + ' этаж</h2>' +
+      '<p class="hint">' + esc(l.a) + ' · лифт № ' + esc(l.n) + '<br>Маршрут: ' + esc(floors.join(" → ")) + '</p></div>' +
+      '<span class="badge q">' + progress.done + ' / ' + progress.total + '</span></div>' +
+      '<button class="btn primary" id="floorAllOk">✓ Все пункты этажа в порядке<small>После этого можно отметить только отдельные замечания</small></button></div>' +
+      '<div class="clList"><div class="module open"><div class="mBody">';
+    ids.forEach(function (id) {
+      var it = findItem(f.type, id, l.u); if (!it) return;
+      var r = floorItemValue_(route.floors[current][id]);
+      html += '<div class="check' + (r.v === "ok" ? " good" : "") + (r.v === "" ? " miss" : "") + '" data-fid="' + esc(id) + '"><div class="txt">' +
+        '<div class="works">' + esc(it.node) + '</div>' + (it.req ? '<div class="req">Норма: ' + esc(it.req) + '</div>' : '') +
+        '<div class="note' + (r.v === "bad" ? "" : " hidden") + '"><input type="text" placeholder="Примечание к замечанию" value="' + esc(r.note || "") + '"></div></div>' +
+        '<div class="toggles"><button class="tgl ok' + (r.v === "ok" ? " on" : "") + '" data-v="ok">✓</button>' +
+        '<button class="tgl bad' + (r.v === "bad" ? " on" : "") + '" data-v="bad">✕</button></div></div>';
+    });
+    html += '</div></div></div>' +
+      '<div id="floorChoice"></div><div class="floorNav"><button class="btn" id="floorCollapse">Свернуть<small>Сохранить и вернуться к остальным пунктам</small></button>' +
+      '<button class="btn primary" id="floorNext">' + (current === fd.bottom ? 'Завершить маршрут' : 'Следующий этаж →') + '<small>Все изменения уже сохраняются автоматически</small></button></div>';
+    screenEl.innerHTML = html;
+    function values() { return route.floors[current]; }
+    screenEl.querySelectorAll("[data-fid]").forEach(function (el) {
+      var id = el.getAttribute("data-fid");
+      el.querySelectorAll(".tgl").forEach(function (b) {
+        b.onclick = function () {
+          var v = b.getAttribute("data-v"), old = floorItemValue_(values()[id]), next = old.v === v ? "" : v;
+          values()[id] = { v:next, note:next === "bad" ? old.note || "" : "" };
+          el.classList.toggle("good", next === "ok"); el.classList.toggle("miss", next === "");
+          el.querySelectorAll(".tgl").forEach(function (x) { x.classList.toggle("on", x.getAttribute("data-v") === next); });
+          el.querySelector(".note").classList.toggle("hidden", next !== "bad");
+          if (next !== "bad") el.querySelector(".note input").value = "";
+          save();
+        };
+      });
+      el.querySelector(".note input").addEventListener("input", function () {
+        values()[id] = floorItemValue_(values()[id]); values()[id].note = this.value; save();
+      });
+    });
+    document.getElementById("floorAllOk").onclick = function () {
+      ids.forEach(function (id) { values()[id] = { v:"ok", note:"" }; }); save(); renderFloorInspection({ mode:mode, floor:current });
+    };
+    function collapse() { route.current = current; save(); back(); }
+    document.getElementById("floorCollapse").onclick = collapse;
+    function finish() { route.current = ""; save(); back(); toast("Поэтажный маршрут сохранён"); }
+    function advance() {
+      var incomplete = ids.filter(function (id) { return floorItemValue_(values()[id]).v === ""; });
+      if (incomplete.length && !confirm("Не отмечено пунктов: " + incomplete.length + ". Перейти дальше?")) return;
+      save();
+      if (current === "1" && Number(fd.bottom) < 1) {
+        document.getElementById("floorChoice").innerHTML = '<div class="card" style="border-color:var(--accent)"><h2>Первый этаж заполнен</h2><p>Продолжить осмотр подземных этажей?</p>' +
+          '<button class="btn primary" id="floorBelow">Продолжить на −1</button><button class="btn" id="floorFinish">Завершить маршрут</button><button class="btn" id="floorHide">Свернуть</button></div>';
+        document.getElementById("floorBelow").onclick = function () { route.current = "-1"; save(); renderFloorInspection({ mode:mode, floor:"-1" }); };
+        document.getElementById("floorFinish").onclick = finish;
+        document.getElementById("floorHide").onclick = collapse;
+        document.getElementById("floorChoice").scrollIntoView({ behavior:"smooth", block:"start" });
+        return;
+      }
+      if (current === fd.bottom) { finish(); return; }
+      var next = floors[floors.indexOf(current) + 1]; route.current = next; save(); renderFloorInspection({ mode:mode, floor:next });
+    }
+    document.getElementById("floorNext").onclick = advance;
   }
 
   function findItem(formType, id, area) {
@@ -976,6 +1185,7 @@
       date: d.date, results: d.results || {}, comment: d.comment || "",
       remarks: d.remarks || remarkList_(d.comment), sectionComments: d.sectionComments || {},
       sectionRemarks: d.sectionRemarks || recordRemarks_(d).sections,
+      floorData:d.floorData || null, floorTop:d.floorTop || "", floorBottom:d.floorBottom || "",
       startedAt: d.startedAt || new Date().toISOString(), editId: d.id
     });
     a.splice(i, 1);
@@ -992,6 +1202,7 @@
       formType: d.formType, formTitle: d.formTitle,
       u: d.lift.u, z: d.lift.z, a: d.lift.a, p: d.lift.p, n: d.lift.n, g: d.lift.g,
       model: d.model || "", org: settings().org || "",
+      floorData:d.floorData || null, floorTop:d.floorTop || "", floorBottom:d.floorBottom || "",
       startedAt: d.startedAt || "", finishedAt: d.finishedAt || "",
       login: acc.login || "", pwd: acc.pwd || "",
       items: Object.keys(d.results).map(function (k) {
@@ -1253,9 +1464,22 @@
     };
   }
 
-  // ---------- ОСМОТРЫ (только админ) ----------
-  function renderInspections(params) {
-    titleEl.textContent = "Осмотры (таблица)";
+  // ---------- ОСМОТРЫ: общий архив актов + административная сводка ----------
+  function renderInspections() {
+    titleEl.textContent = "Осмотры";
+    var html = '<button class="btn primary" id="bActArchive">Архив актов приёмки<small>Сохранённые акты по адресам · открыть копию для повторной приёмки</small></button>' +
+      '<button class="btn" id="bCommissionActs">Акты комиссионного осмотра<small>Файлы из папки «Акты осмотров» на Google Диске</small></button>';
+    if (isAdmin()) html += '<button class="btn" id="bInspSummary">Сводка осмотров<small>Все осмотры: даты, исполнители, время начала и конца ТО · только администратору</small></button>';
+    screenEl.innerHTML = html;
+    document.getElementById("bActArchive").onclick = function () { go("actarchive"); };
+    document.getElementById("bCommissionActs").onclick = function () { go("commissionacts"); };
+    var summary = document.getElementById("bInspSummary");
+    if (summary) summary.onclick = function () { go("inspsummary"); };
+  }
+
+  function renderInspectionSummary() {
+    if (!isAdmin()) { renderInspections(); return; }
+    titleEl.textContent = "Сводка осмотров";
     var cache = lsGet("to_insp", null);
     var html = '<div class="card"><div class="row"><div><h2>Журнал осмотров</h2>' +
       '<p class="hint">' + (cache && cache.t ? "Обновлено: " + new Date(cache.t).toLocaleString() : "Нет данных") + "</p></div>" +
@@ -1286,9 +1510,139 @@
       api({ what: "inspections", login: acc.login || "", pwd: acc.pwd || "" }).then(function (r) {
         if (!r.ok) { toast("Отказ: " + (r.error || "")); return; }
         lsSet("to_insp", { t: Date.now(), headers: r.headers, rows: r.rows });
-        renderInspections();
+        renderInspectionSummary();
       }).catch(function () { toast("Не удалось загрузить"); });
     };
+  }
+
+  function actArchiveCache() { return lsGet("to_act_archive", null); }
+  function renderActArchive(params) {
+    titleEl.textContent = "Архив актов приёмки";
+    var cache = actArchiveCache();
+    screenEl.innerHTML = '<div class="card"><div class="row"><div><h2>Память актов по адресам</h2>' +
+      '<p class="hint">Открывается новая редактируемая копия. Архив обновляется после отправки акта.<br>' +
+      (cache && cache.t ? "Загружено: " + new Date(cache.t).toLocaleString() : "Нажмите «Обновить» (нужен интернет)") + '</p></div>' +
+      '<button class="btn" id="aaRef" style="width:auto;padding:8px 14px;font-size:.85rem">Обновить</button></div></div>' +
+      '<input type="text" id="aaQ" placeholder="Поиск: адрес или № лифта" autocomplete="off">' +
+      '<div id="aaRes" style="margin-top:8px"></div>';
+    function draw(q) {
+      var myArea = (account() || {}).u || "";
+      var records = ((cache && cache.records) || []).filter(function (r) {
+        return isAdmin() || !myArea || canonicalArea(r.data && r.data.u) === canonicalArea(myArea);
+      });
+      q = String(q || "").toLowerCase();
+      var visible = records.map(function (r, i) { return { r:r, i:i }; }).filter(function (x) {
+        var d = x.r.data || {};
+        return !q || (String(d.a || "") + " " + String(d.n || "")).toLowerCase().indexOf(q) >= 0;
+      });
+      var byAddr = {}, order = [];
+      visible.forEach(function (x) {
+        var addr = String((x.r.data && x.r.data.a) || "").trim() || "Адрес не указан";
+        if (!byAddr[addr]) { byAddr[addr] = []; order.push(addr); }
+        byAddr[addr].push(x);
+      });
+      order.sort(function (a, b) { return a.localeCompare(b, "ru", { numeric:true }); });
+      document.getElementById("aaRes").innerHTML = order.length ? order.map(function (addr) {
+        var items = byAddr[addr].sort(function (x, y) {
+          return String(x.r.data.n || "").localeCompare(String(y.r.data.n || ""), "ru", { numeric:true });
+        }).map(function (x) {
+          var d = x.r.data || {};
+          return '<div class="item" data-aa="' + x.i + '" style="cursor:pointer"><div class="t">Лифт № ' + esc(d.n) +
+            (d.p ? ' · парадная ' + esc(d.p) : '') + '</div><div class="s">Акт от ' + esc(d.date || '—') +
+            ' · ' + esc(d.worker || '—') + (d.model ? '<br>' + esc(d.model) : '') +
+            '</div><div class="s" style="color:var(--ok);font-weight:600">Открыть копию для повторной приёмки →</div></div>';
+        }).join("");
+        return acc(esc(addr), byAddr[addr].length, items, { open:!!q });
+      }).join("") : '<div class="empty">' + (records.length ? "Ничего не найдено" : "Архив пуст. Отправленные акты приёмки появятся здесь.") + '</div>';
+      document.querySelectorAll("[data-aa]").forEach(function (el) {
+        el.onclick = function () { openActArchiveCopy(records[Number(el.getAttribute("data-aa"))]); };
+      });
+    }
+    function refresh() {
+      if (!navigator.onLine) { toast("Нет связи"); return; }
+      var acc = account() || {};
+      toast("Загрузка архива…");
+      api({ what:"actarchive", login:acc.login || "", pwd:acc.pwd || "" }).then(function (r) {
+        if (!r.ok) { toast("Отказ: " + (r.error || "")); return; }
+        lsSet("to_act_archive", { t:Date.now(), records:r.records || [] });
+        renderActArchive();
+      }).catch(function () { toast("Не удалось загрузить архив"); });
+    }
+    draw("");
+    document.getElementById("aaQ").addEventListener("input", function () { draw(this.value.trim()); });
+    document.getElementById("aaRef").onclick = refresh;
+    if (params && params.refresh) refresh();
+  }
+
+  function openActArchiveCopy(record) {
+    var d = record && record.data;
+    if (!d) { toast("Запись архива повреждена"); return; }
+    var lift = { u:d.u || "", z:d.z || "", a:d.a || "", p:d.p || "", n:d.n || "", g:d.g || "" };
+    var f = findForm("Акт приёмки", lift.u);
+    if (!f) { toast("Форма акта приёмки не найдена"); return; }
+    var results = {};
+    (d.items || []).forEach(function (it) { results[it.id] = { v:it.v == null ? "" : String(it.v), note:it.note || "" }; });
+    var copy = { formType:"Акт приёмки", lift:lift, model:d.model || "", date:new Date().toISOString().slice(0, 10),
+      results:results, comment:d.comment || "", remarks:d.remarks || remarkList_(d.comment),
+      sectionComments:d.sectionComments || {}, sectionRemarks:d.sectionRemarks || recordRemarks_(d).sections,
+      floorData:d.floorData || null, floorTop:d.floorTop || "", floorBottom:d.floorBottom || "",
+      startedAt:new Date().toISOString(), editId:null };
+    state.form = f;
+    state.lift = lift;
+    lsSet(DRAFT_KEY, copy);
+    go("checklist", { draft:copy });
+    toast("Открыта новая копия — исходный архив не изменён");
+  }
+
+  function commissionFileNorm_(value) {
+    return String(value == null ? "" : value).toLowerCase().replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function commissionActVisible_(file) {
+    if (isAdmin()) return true;
+    var area = canonicalArea((account() || {}).u || ""), name = commissionFileNorm_(file && file.name);
+    return DATA.lifts.some(function (l) {
+      return canonicalArea(l.u) === area && commissionFileNorm_(l.a) && name.indexOf(commissionFileNorm_(l.a)) >= 0;
+    });
+  }
+  function renderCommissionActs(params) {
+    titleEl.textContent = "Акты комиссионного осмотра";
+    var cache = lsGet("to_commission_acts", null);
+    screenEl.innerHTML = '<div class="card"><div class="row"><div><h2>Файлы на Google Диске</h2>' +
+      '<p class="hint">Папка «Акты осмотров» · доступ по участку<br>' +
+      (cache && cache.t ? "Обновлено: " + new Date(cache.t).toLocaleString() : "Нажмите «Обновить» (нужен интернет)") + '</p></div>' +
+      '<button class="btn" id="caRef" style="width:auto;padding:8px 14px;font-size:.85rem">Обновить</button></div></div>' +
+      '<input type="text" id="caQ" placeholder="Поиск: адрес или № лифта" autocomplete="off">' +
+      '<div class="list" id="caRes" style="margin-top:8px"></div>';
+    function draw(q) {
+      var files = ((cache && cache.files) || []).filter(commissionActVisible_);
+      q = String(q || "").toLowerCase();
+      var visible = files.filter(function (f) { return !q || String(f.name || "").toLowerCase().indexOf(q) >= 0; });
+      document.getElementById("caRes").innerHTML = visible.length ? visible.map(function (f) {
+        return '<div class="item" data-ca="' + esc(f.id) + '" style="cursor:pointer"><div class="t">' + esc(f.name) + '</div>' +
+          '<div class="s">Изменён: ' + esc(f.updated ? new Date(f.updated).toLocaleString() : "—") + '</div>' +
+          '<div class="s" style="color:var(--accent);font-weight:600">Открыть файл на Google Диске →</div></div>';
+      }).join("") : '<div class="empty">' + (files.length ? "Ничего не найдено" : "Нет доступных комиссионных актов") + '</div>';
+      document.querySelectorAll("[data-ca]").forEach(function (el) {
+        el.onclick = function () {
+          var file = visible.find(function (f) { return f.id === el.getAttribute("data-ca"); });
+          if (file && file.url) window.open(file.url, "_blank", "noopener");
+        };
+      });
+    }
+    function refresh() {
+      if (!navigator.onLine) { toast("Нет связи"); return; }
+      var acc = account() || {};
+      toast("Загрузка файлов…");
+      api({ what:"commissionacts", login:acc.login || "", pwd:acc.pwd || "" }).then(function (r) {
+        if (!r.ok) { toast("Отказ: " + (r.error || "")); return; }
+        lsSet("to_commission_acts", { t:Date.now(), files:r.files || [] });
+        renderCommissionActs();
+      }).catch(function () { toast("Не удалось загрузить список актов"); });
+    }
+    draw("");
+    document.getElementById("caQ").addEventListener("input", function () { draw(this.value.trim()); });
+    document.getElementById("caRef").onclick = refresh;
+    if (params && params.refresh) refresh();
   }
 
   // ---------- ДОКУМЕНТЫ (библиотека, этап 1 базы знаний) ----------
@@ -2692,10 +3046,10 @@
         (bold ? ' font-weight="700"' : '') + (underline ? ' text-decoration="underline"' : '') +
         (center ? ' text-anchor="middle"' : '') + '>' + esc(str) + '</text>');
     }
-    function field(fld, str, bad, baseSize) {
+    function field(fld, str, bad, baseSize, center) {
       if (!fld || str === "" || str == null) return;
-      var size = baseSize || (bad ? 9 : 10), fitted = actFit_(str, fld.w - 3, size, !!bad);
-      T(fld.page, fld.x + 1, fld.b, str, fitted.s, !!bad, true, false);
+      var size = baseSize || (bad ? 9 : 10), fitted = actFit_(str, fld.w - 5, size, !!bad);
+      T(fld.page, center ? fld.x + fld.w / 2 : fld.x + 1, fld.b, str, fitted.s, !!bad, true, !!center);
     }
     var dp = String(d.date || '').split('-'), H = G.hdr;
     if (dp.length === 3) {
@@ -2710,7 +3064,7 @@
 
     G.f.forEach(function (fld) {
       var v = actVal_(d, fld.id);
-      if (v) field(fld, v.full, v.bad, v.bad ? 9 : 10);
+      if (v) field(fld, v.full, v.bad, v.bad ? 9 : 10, true);
     });
 
     G.grids.forEach(function (grid) {
@@ -2858,7 +3212,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.9.0";
+  var APP_BUILD = "2.11.0";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
