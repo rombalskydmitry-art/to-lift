@@ -1,4 +1,6 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.8.3
+/* Журнал ТО лифтов — офлайн PWA, v2.8.4
+   v2.8.4: ручная проверка сравнивает только хэш оболочки (без ложного сообщения
+   об обновлении); после загрузки открывается новая навигация с меткой версии.
    v2.8.3: один черновик не может отправиться одновременно автоматически и вручную;
    повторный вызов присоединяется к уже выполняющемуся запросу.
    v2.8.2: обновление PWA применяется при смене service worker и после сообщения
@@ -2046,7 +2048,7 @@
         ? '<p class="hint">Приёмник данных задан в комплекте приложения и обновляется автоматически вместе с ним.<br><span style="word-break:break-all">' + esc(window.APP_ENDPOINT) + "</span></p>"
         : '<p class="hint">Ссылка Google Apps Script (…/exec) — берётся в «Управление развертываниями».</p>' +
           '<input type="url" id="sEndpoint" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(s.endpoint) + '">') + "</div>" +
-      '<div class="card"><h2>Справка</h2><p class="hint">Версия 2.8.3 · видов ТО: ' + DATA.forms.length +
+      '<div class="card"><h2>Справка</h2><p class="hint">Версия 2.8.4 · видов ТО: ' + DATA.forms.length +
       " · лифтов в справочнике: " + DATA.lifts.length + ".<br>Осмотры хранятся в телефоне до отправки.<br>" +
       'Сборка: <b id="appVer">' + esc(window.__appVer || "—") + '</b></p>' +
       '<div style="margin-top:10px"><button type="button" class="miniBtn" id="sUpd">Проверить обновления</button></div></div>' +
@@ -2079,7 +2081,7 @@
       if (!("serviceWorker" in navigator)) { toast("Автообновление в этом браузере недоступно"); return; }
       if (!navigator.onLine) { toast("Нет интернета — проверить обновления нельзя"); return; }
       su.disabled = true; su.textContent = "Проверяю…";
-      var done = false, beforeVer = window.__appVer || "";
+      var done = false, beforeVer = window.__shellVer || "";
       function restore() {
         su.disabled = false; su.textContent = "Проверить обновления";
         window.__onUpd = null;
@@ -2868,7 +2870,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.8.3";
+  var APP_BUILD = "2.8.4";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
@@ -2878,7 +2880,11 @@
     if (now - last < 10000) return;
     updateReloading = true;
     try { sessionStorage.setItem("to_update_reload", String(now)); } catch (e2) {}
-    location.reload();
+    // Новая навигация, а не повтор текущего документа: исключаем возврат старой
+    // страницы из BFCache и явно помечаем переход на загруженную оболочку.
+    var target = new URL(location.href);
+    target.searchParams.set("upd", String(now));
+    location.replace(target.href);
   }
   function setAppVer_(ver) {
     window.__appVer = APP_BUILD + (ver ? " · " + ver : "");
