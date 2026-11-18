@@ -1,4 +1,6 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.12.0
+/* Журнал ТО лифтов — офлайн PWA, v2.12.1
+   v2.12.1: составы маршрутов и разделы 5–8 берутся из актуального чек-листа;
+   после этажа 1 всегда предлагается продолжение на −1, нижняя граница исправляется автоматически.
    v2.12.0: новый порядок разделов акта, итоговая проверка, предыдущий этаж;
    поэтажные пункты автоматически +, механик отмечает только ×.
    v2.11.0: обязательная этажность и поэтажные маршруты крыши/дверей и нормальной работы;
@@ -596,6 +598,17 @@
     roof: { title:"Двери шахты / крыша кабины", short:"Крыша кабины", ids:["А5.1","А5.2","А5.3","А5.4","А5.5","А5.6","А5.7","А5.8","А5.9","А5.10","А5.11","А5.12","А5.13","А5.14","А5.15","А5.16","А5.17","А5.21","А5.23","А5.24","А5.25"] },
     normal: { title:"Проверка в нормальной работе", short:"Нормальная работа", ids:["А5.18","А5.19","А5.20","А5.22"] }
   };
+  // В актуальном чек-листе состав маршрутов хранится в разделах 3 и 7.
+  // Не дублируем его в коде: новые пункты из таблицы сразу попадают в осмотр.
+  function floorModeIds_(mode, f) {
+    f = f || state.form;
+    var sectionNo = mode === "roof" ? 3 : 7;
+    var sec = (f && f.sections || []).find(function (s) {
+      return new RegExp("^\\s*" + sectionNo + "\\.").test(String(s.name || ""));
+    });
+    var ids = sec ? (sec.items || []).filter(function (it) { return itemType(it) === "floors"; }).map(function (it) { return it.id; }) : [];
+    return ids.length ? ids : FLOOR_MODES_[mode].ids;
+  }
   function floorDataOf_(d) {
     var fd = d && d.floorData ? d.floorData : {};
     fd.top = String(fd.top != null ? fd.top : (d && d.floorTop) || "");
@@ -620,7 +633,7 @@
     var fd = floorDataOf_(d), results = d.results || {};
     Object.keys(FLOOR_MODES_).forEach(function (mode) {
       var floors = fd.routes[mode].floors || {};
-      FLOOR_MODES_[mode].ids.forEach(function (id) {
+      floorModeIds_(mode).forEach(function (id) {
         var badFloors = [], notes = [];
         floorList_(fd).forEach(function (floor) {
           var r = floorItemValue_(floors[floor] && floors[floor][id]);
@@ -636,7 +649,7 @@
     var floors = floorList_(fd), data = fd.routes[mode], done = 0;
     floors.forEach(function (floor) {
       var values = data.floors[floor] || {};
-      if (data.seen && data.seen[floor] && FLOOR_MODES_[mode].ids.every(function (id) { return floorItemValue_(values[id]).v !== ""; })) done++;
+      if (data.seen && data.seen[floor] && floorModeIds_(mode).every(function (id) { return floorItemValue_(values[id]).v !== ""; })) done++;
     });
     return { done:done, total:floors.length };
   }
@@ -657,20 +670,33 @@
 
   function actChecklistModules_(f) {
     var roofGeneral = ["А2.24","А2.25","А2.26","А2.7","А2.27","А2.10"];
-    var head = ["А2.1","А2.2","А2.3","А2.18","А2.19","А2.20","А2.21","А2.22","А2.40","А2.41","А2.23"];
-    function items(ids) { return ids.map(function (id) { return findItem(f.type, id, f.area); }).filter(Boolean); }
+    var legacyHead = ["А2.1","А2.2","А2.3","А2.18","А2.19","А2.20","А2.21","А2.22","А2.40","А2.41","А2.23"];
+    function section(no) {
+      return (f.sections || []).find(function (s) {
+        return new RegExp("^\\s*" + no + "\\.").test(String(s.name || ""));
+      }) || { items:[] };
+    }
     function direct(sec, ids) { return (sec.items || []).filter(function (it) { return ids.indexOf(it.id) >= 0; }); }
-    var a2 = f.sections[1] || { items:[] };
-    var shaftRest = (a2.items || []).filter(function (it) { return head.indexOf(it.id) < 0 && roofGeneral.indexOf(it.id) < 0; });
+    var s1 = section(1), s2 = section(2), s3 = section(3), s4 = section(4),
+        s5 = section(5), s6 = section(6), s7 = section(7), s8 = section(8);
+    var modern = s3.items.length && s4.items.length && s5.items.length && s6.items.length && s7.items.length && s8.items.length;
+    var head = modern ? (s2.items || []).filter(function (it) { return roofGeneral.indexOf(it.id) < 0; }) : direct(s2, legacyHead);
+    // Старый пятисекционный формат поддерживаем, но актуальные восемь разделов
+    // берём строго из таблицы: приямок, купе и итоговая проверка не зависят от индексов.
+    var pit = modern ? s5.items : (f.sections[2] || {}).items || [];
+    var cabin = modern ? s6.items : (f.sections[3] || {}).items || [];
+    var shaft = modern ? s4.items : (s2.items || []).filter(function (it) {
+      return legacyHead.indexOf(it.id) < 0 && roofGeneral.indexOf(it.id) < 0;
+    });
     var defs = [
-      { key:"sec1", name:"1. СТАНЦИЯ УПРАВЛЕНИЯ", items:(f.sections[0] || {}).items || [], remarkKey:"А1" },
-      { key:"sec2", name:"2. ОГОЛОВОК ШАХТЫ", items:direct(a2, head), remarkKey:"А2" },
-      { key:"sec3", name:"3. ДВЕРИ ШАХТЫ / КРЫША КАБИНЫ", items:direct(a2, roofGeneral), floorMode:"roof", remarkKey:"А5" },
-      { key:"sec4", name:"4. НАПРАВЛЯЮЩИЕ, ПРОТИВОВЕС И ШАХТА", items:shaftRest },
-      { key:"sec5", name:"5. ПРИЯМОК", items:(f.sections[2] || {}).items || [], remarkKey:"А3" },
-      { key:"sec6", name:"6. КУПЕ КАБИНЫ", items:(f.sections[3] || {}).items || [], remarkKey:"А4" },
+      { key:"sec1", name:"1. СТАНЦИЯ УПРАВЛЕНИЯ", items:s1.items || [], remarkKey:"А1" },
+      { key:"sec2", name:"2. ОГОЛОВОК ШАХТЫ", items:head, remarkKey:"А2" },
+      { key:"sec3", name:"3. ДВЕРИ ШАХТЫ / КРЫША КАБИНЫ", items:direct(s2, roofGeneral), floorMode:"roof", remarkKey:"А5" },
+      { key:"sec4", name:"4. НАПРАВЛЯЮЩИЕ, ПРОТИВОВЕС И ШАХТА", items:shaft },
+      { key:"sec5", name:"5. ПРИЯМОК", items:pit, remarkKey:"А3" },
+      { key:"sec6", name:"6. КУПЕ КАБИНЫ", items:cabin, remarkKey:"А4" },
       { key:"sec7", name:"7. ПРОВЕРКА В НОРМАЛЬНОЙ РАБОТЕ", items:[], floorMode:"normal" },
-      { key:"sec8", name:"8. ИТОГОВАЯ ПРОВЕРКА ЛИФТА", items:[], finalCard:true }
+      { key:"sec8", name:"8. ИТОГОВАЯ ПРОВЕРКА ЛИФТА", items:modern ? s8.items : [], finalCard:true }
     ];
     return defs.map(function (m) {
       m.sections = [{ name:"", items:m.items }]; m.ids = m.items.map(function (it) { return it.id; }); delete m.items; return m;
@@ -993,7 +1019,7 @@
     if (!f || !l || !FLOOR_MODES_[mode]) { render("checklist"); return; }
     var d = lsGet(DRAFT_KEY, null) || {}, fd = floorDataOf_(d), floors = floorList_(fd);
     if (!floors.length) { toast("Сначала укажите этажность"); render("checklist", { draft:d }); return; }
-    var route = fd.routes[mode], ids = FLOOR_MODES_[mode].ids;
+    var route = fd.routes[mode], ids = floorModeIds_(mode, f);
     function firstIncomplete() {
       return floors.find(function (floor) {
         var values = route.floors[floor] || {};
@@ -1078,10 +1104,13 @@
       var incomplete = ids.filter(function (id) { return floorItemValue_(values()[id]).v === ""; });
       if (incomplete.length && !confirm("Не отмечено пунктов: " + incomplete.length + ". Перейти дальше?")) return;
       save();
-      if (current === "1" && Number(fd.bottom) < 1) {
+      if (current === "1") {
         document.getElementById("floorChoice").innerHTML = '<div class="floorChoiceOverlay"><div class="card" style="border-color:var(--accent);margin:0"><h2>Первый этаж заполнен</h2><p>Продолжить осмотр подземных этажей?</p>' +
           '<button class="btn primary" id="floorBelow">Продолжить на −1</button><button class="btn" id="floorFinish">Завершить маршрут</button><button class="btn" id="floorHide">Свернуть</button></div></div>';
-        document.getElementById("floorBelow").onclick = function () { route.current = "-1"; save(); renderFloorInspection({ mode:mode, floor:"-1" }); };
+        document.getElementById("floorBelow").onclick = function () {
+          if (Number(fd.bottom) >= 1) fd.bottom = "-1";
+          route.current = "-1"; save(); renderFloorInspection({ mode:mode, floor:"-1" });
+        };
         document.getElementById("floorFinish").onclick = finish;
         document.getElementById("floorHide").onclick = collapse;
         document.getElementById("floorChoice").scrollIntoView({ behavior:"smooth", block:"start" });
@@ -3241,7 +3270,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.12.0";
+  var APP_BUILD = "2.12.1";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
