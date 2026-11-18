@@ -1,4 +1,6 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.8.2
+/* Журнал ТО лифтов — офлайн PWA, v2.8.3
+   v2.8.3: один черновик не может отправиться одновременно автоматически и вручную;
+   повторный вызов присоединяется к уже выполняющемуся запросу.
    v2.8.2: обновление PWA применяется при смене service worker и после сообщения
    о готовой оболочке; добавлена защита от циклической перезагрузки.
    v2.8.1: при отправке акта приёмки приложение создаёт новый двухстраничный PDF
@@ -988,7 +990,11 @@
     }).then(function (r) { return r.json(); });
   }
 
+  var sendJobs_ = {};
   function syncOne(id, manual) {
+    // Автосинхронизация, кнопка «повторить» и «отправить всё» могут сработать
+    // одновременно. Второй вызов ждёт тот же запрос, а не шлёт осмотр заново.
+    if (sendJobs_[id]) return sendJobs_[id];
     var ep = settings().endpoint;
     var a = drafts();
     var d = a.find(function (x) { return x.id === id; });
@@ -1001,7 +1007,7 @@
       if (manual) toast("Нет связи — запись останется в очереди");
       return Promise.resolve();
     }
-    return payloadForSend_(d).then(function (p) {
+    var job = payloadForSend_(d).then(function (p) {
       return send(p, ep);
     }).then(function () {
       d.status = "sent"; saveDrafts(a);
@@ -1011,6 +1017,10 @@
       if (state.view === "outbox") render("outbox");
       if (manual) toast(e && e.message ? e.message : "Не удалось отправить — попробуйте позже");
     });
+    sendJobs_[id] = job;
+    function clearJob() { delete sendJobs_[id]; }
+    job.then(clearJob, clearJob);
+    return job;
   }
 
   function syncAll(manual) {
@@ -2036,7 +2046,7 @@
         ? '<p class="hint">Приёмник данных задан в комплекте приложения и обновляется автоматически вместе с ним.<br><span style="word-break:break-all">' + esc(window.APP_ENDPOINT) + "</span></p>"
         : '<p class="hint">Ссылка Google Apps Script (…/exec) — берётся в «Управление развертываниями».</p>' +
           '<input type="url" id="sEndpoint" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(s.endpoint) + '">') + "</div>" +
-      '<div class="card"><h2>Справка</h2><p class="hint">Версия 2.8.2 · видов ТО: ' + DATA.forms.length +
+      '<div class="card"><h2>Справка</h2><p class="hint">Версия 2.8.3 · видов ТО: ' + DATA.forms.length +
       " · лифтов в справочнике: " + DATA.lifts.length + ".<br>Осмотры хранятся в телефоне до отправки.<br>" +
       'Сборка: <b id="appVer">' + esc(window.__appVer || "—") + '</b></p>' +
       '<div style="margin-top:10px"><button type="button" class="miniBtn" id="sUpd">Проверить обновления</button></div></div>' +
@@ -2858,7 +2868,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.8.2";
+  var APP_BUILD = "2.8.3";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
