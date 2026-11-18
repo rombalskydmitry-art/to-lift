@@ -1,4 +1,6 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.11.0
+/* Журнал ТО лифтов — офлайн PWA, v2.12.0
+   v2.12.0: новый порядок разделов акта, итоговая проверка, предыдущий этаж;
+   поэтажные пункты автоматически +, механик отмечает только ×.
    v2.11.0: обязательная этажность и поэтажные маршруты крыши/дверей и нормальной работы;
    автосохранение, следующий этаж, сворачивание и продолжение с плавающей плашки.
    v2.10.1: акты комиссионного осмотра из папки Drive «Акты осмотров»;
@@ -600,8 +602,9 @@
     fd.bottom = String(fd.bottom != null ? fd.bottom : (d && d.floorBottom) != null ? d.floorBottom : "1");
     fd.routes = fd.routes || {};
     Object.keys(FLOOR_MODES_).forEach(function (m) {
-      fd.routes[m] = fd.routes[m] || { current:"", floors:{} };
+      fd.routes[m] = fd.routes[m] || { current:"", floors:{}, seen:{} };
       fd.routes[m].floors = fd.routes[m].floors || {};
+      fd.routes[m].seen = fd.routes[m].seen || {};
     });
     return fd;
   }
@@ -633,7 +636,7 @@
     var floors = floorList_(fd), data = fd.routes[mode], done = 0;
     floors.forEach(function (floor) {
       var values = data.floors[floor] || {};
-      if (FLOOR_MODES_[mode].ids.every(function (id) { return floorItemValue_(values[id]).v !== ""; })) done++;
+      if (data.seen && data.seen[floor] && FLOOR_MODES_[mode].ids.every(function (id) { return floorItemValue_(values[id]).v !== ""; })) done++;
     });
     return { done:done, total:floors.length };
   }
@@ -650,6 +653,28 @@
         '<span style="flex:1;min-width:0;overflow-wrap:anywhere;font-size:.9rem;line-height:1.35">' + esc(text) + '</span>' +
         '<button type="button" class="miniBtn" data-remark-del="' + i + '" aria-label="Удалить замечание" style="min-height:30px;padding:3px 9px;flex:none">×</button></div>';
     }).join("") + '</div>';
+  }
+
+  function actChecklistModules_(f) {
+    var roofGeneral = ["А2.24","А2.25","А2.26","А2.7","А2.27","А2.10"];
+    var head = ["А2.1","А2.2","А2.3","А2.18","А2.19","А2.20","А2.21","А2.22","А2.40","А2.41","А2.23"];
+    function items(ids) { return ids.map(function (id) { return findItem(f.type, id, f.area); }).filter(Boolean); }
+    function direct(sec, ids) { return (sec.items || []).filter(function (it) { return ids.indexOf(it.id) >= 0; }); }
+    var a2 = f.sections[1] || { items:[] };
+    var shaftRest = (a2.items || []).filter(function (it) { return head.indexOf(it.id) < 0 && roofGeneral.indexOf(it.id) < 0; });
+    var defs = [
+      { key:"sec1", name:"1. СТАНЦИЯ УПРАВЛЕНИЯ", items:(f.sections[0] || {}).items || [], remarkKey:"А1" },
+      { key:"sec2", name:"2. ОГОЛОВОК ШАХТЫ", items:direct(a2, head), remarkKey:"А2" },
+      { key:"sec3", name:"3. ДВЕРИ ШАХТЫ / КРЫША КАБИНЫ", items:direct(a2, roofGeneral), floorMode:"roof", remarkKey:"А5" },
+      { key:"sec4", name:"4. НАПРАВЛЯЮЩИЕ, ПРОТИВОВЕС И ШАХТА", items:shaftRest },
+      { key:"sec5", name:"5. ПРИЯМОК", items:(f.sections[2] || {}).items || [], remarkKey:"А3" },
+      { key:"sec6", name:"6. КУПЕ КАБИНЫ", items:(f.sections[3] || {}).items || [], remarkKey:"А4" },
+      { key:"sec7", name:"7. ПРОВЕРКА В НОРМАЛЬНОЙ РАБОТЕ", items:[], floorMode:"normal" },
+      { key:"sec8", name:"8. ИТОГОВАЯ ПРОВЕРКА ЛИФТА", items:[], finalCard:true }
+    ];
+    return defs.map(function (m) {
+      m.sections = [{ name:"", items:m.items }]; m.ids = m.items.map(function (it) { return it.id; }); delete m.items; return m;
+    });
   }
 
   function renderChecklist(params) {
@@ -690,14 +715,7 @@
 
     // Акт приёмки — строго в порядке печатной формы (СУ → Шахта → Приямок → Купе → Двери шахты),
     // без перегруппировки по модулям; остальные виды ТО — по модулям, как раньше
-    var modules = f.header
-      ? f.sections.map(function (s, i) {
-          var floorSection = f.header && i === 4;
-          return { key: "sec" + i, name: s.name, floorSection:floorSection,
-            sections: [{ name: "", items: floorSection ? [] : s.items }],
-            ids: floorSection ? [] : s.items.map(function (it) { return it.id; }) };
-        })
-      : checklistModules(f);
+    var modules = f.header ? actChecklistModules_(f) : checklistModules(f);
     html += '<div class="clList">' +
       '<div class="moduleActions"><button class="miniBtn" id="modExpand">Развернуть все</button>' +
       '<button class="miniBtn" id="modCollapse">Свернуть все</button></div>';
@@ -745,15 +763,19 @@
           html += "</div>";
         });
       });
-      if (m.floorSection) {
-        var pr = floorRouteProgress_(floorData, "roof"), pn = floorRouteProgress_(floorData, "normal");
-        html += '<div style="padding:14px"><p class="hint" style="margin-top:0">Поэтажный осмотр: от верхнего этажа к нижнему. Заполнение сохраняется автоматически.</p>' +
-          '<button class="btn primary" id="routeRoof">Двери шахты / крыша кабины<small>Прогресс: ' + pr.done + ' из ' + pr.total + ' этажей</small></button>' +
-          '<button class="btn" id="routeNormal">Проверка в нормальной работе<small>Точность остановки, кнопки и индикаторы · ' + pn.done + ' из ' + pn.total + '</small></button></div>';
+      if (m.floorMode) {
+        var fp = floorRouteProgress_(floorData, m.floorMode);
+        html += '<div style="padding:14px"><p class="hint" style="margin-top:0">Поэтажный осмотр сверху вниз. Все пункты автоматически «+» — нажимайте × только при замечании.</p>' +
+          '<button class="btn primary" id="' + (m.floorMode === "roof" ? "routeRoof" : "routeNormal") + '">Начать / продолжить поэтажный осмотр<small>Прогресс: ' + fp.done + ' из ' + fp.total + ' этажей</small></button></div>';
       }
-      // Отдельные замечания к блоку — только для акта приёмки.
-      if (f.header) {
-        var secKey = "А" + (mi + 1);
+      if (m.finalCard) {
+        html += '<div style="padding:16px"><p class="hint" style="margin-top:0">Проверьте заполнение разделов, замечания и этажность. Ниже можно сохранить осмотр или распечатать акт.</p>' +
+          '<div class="item"><div class="t">Этажи: ' + esc(floorData.top || "—") + ' … ' + esc(floorData.bottom || "—") + '</div><div class="s">Крыша/двери: ' + floorRouteProgress_(floorData, "roof").done + ' из ' + floorRouteProgress_(floorData, "roof").total +
+          ' · Нормальная работа: ' + floorRouteProgress_(floorData, "normal").done + ' из ' + floorRouteProgress_(floorData, "normal").total + '</div></div></div>';
+      }
+      // Замечания привязаны к исходным блокам печатного акта, несмотря на новый порядок экрана.
+      if (f.header && m.remarkKey) {
+        var secKey = m.remarkKey;
         html += remarkEditorHtml_(secKey, 'Замечания к блоку «' + m.name + '»', sectionRemarks[secKey] || []);
       }
       html += '</div></div>';
@@ -975,12 +997,13 @@
     function firstIncomplete() {
       return floors.find(function (floor) {
         var values = route.floors[floor] || {};
-        return ids.some(function (id) { return floorItemValue_(values[id]).v === ""; });
+        return !route.seen[floor] || ids.some(function (id) { return floorItemValue_(values[id]).v === ""; });
       }) || floors[0];
     }
     var current = String(params.floor || route.current || firstIncomplete());
     if (floors.indexOf(current) < 0) current = floors[0];
     route.current = current;
+    route.seen[current] = true;
     route.floors[current] = route.floors[current] || {};
     // Перенос старых списков «этажи с замечаниями» в поэтажный редактор — сразу всех этажей,
     // чтобы последующая сборка results не потеряла замечания других этажей.
@@ -990,6 +1013,7 @@
       ids.forEach(function (id) {
         var old = d.results && d.results[id], value = old && old.v;
         if (String(value || "").split(/[,;\s]+/).indexOf(floor) >= 0) route.floors[floor][id] = { v:"bad", note:(old && old.note) || "" };
+        if (!route.floors[floor][id]) route.floors[floor][id] = { v:"ok", note:"" };
       });
     });
     function save() {
@@ -1011,25 +1035,26 @@
     ids.forEach(function (id) {
       var it = findItem(f.type, id, l.u); if (!it) return;
       var r = floorItemValue_(route.floors[current][id]);
-      html += '<div class="check' + (r.v === "ok" ? " good" : "") + (r.v === "" ? " miss" : "") + '" data-fid="' + esc(id) + '"><div class="txt">' +
-        '<div class="works">' + esc(it.node) + '</div>' + (it.req ? '<div class="req">Норма: ' + esc(it.req) + '</div>' : '') +
+      html += '<div class="check' + (r.v !== "bad" ? " good" : "") + '" data-fid="' + esc(id) + '"><div class="txt">' +
+        '<div class="works">' + esc(it.node) + '</div>' + (it.req ? '<div class="req">По умолчанию: + · нажмите × при замечании</div>' : '') +
         '<div class="note' + (r.v === "bad" ? "" : " hidden") + '"><input type="text" placeholder="Примечание к замечанию" value="' + esc(r.note || "") + '"></div></div>' +
-        '<div class="toggles"><button class="tgl ok' + (r.v === "ok" ? " on" : "") + '" data-v="ok">✓</button>' +
-        '<button class="tgl bad' + (r.v === "bad" ? " on" : "") + '" data-v="bad">✕</button></div></div>';
+        '<div class="toggles"><button class="tgl bad' + (r.v === "bad" ? " on" : "") + '" data-v="bad" aria-label="Отметить замечание">✕</button></div></div>';
     });
     html += '</div></div></div>' +
-      '<div id="floorChoice"></div><div class="floorNav"><button class="btn" id="floorCollapse">Свернуть<small>Сохранить и вернуться к остальным пунктам</small></button>' +
-      '<button class="btn primary" id="floorNext">' + (current === fd.bottom ? 'Завершить маршрут' : 'Следующий этаж →') + '<small>Все изменения уже сохраняются автоматически</small></button></div>';
+      '<div id="floorChoice"></div><div class="floorNav"><div class="row" style="gap:8px;align-items:stretch">' +
+      '<button class="btn" id="floorPrev" style="flex:1;margin:0"' + (floors.indexOf(current) <= 0 ? ' disabled' : '') + '>← Предыдущий<small>Предыдущий этаж</small></button>' +
+      '<button class="btn" id="floorCollapse" style="flex:1;margin:0">Свернуть<small>Вернуться к чек-листу</small></button>' +
+      '<button class="btn primary" id="floorNext" style="flex:1;margin:0">' + (current === fd.bottom ? 'Завершить' : 'Следующий →') + '<small>Следующий этаж</small></button></div></div>';
     screenEl.innerHTML = html;
     function values() { return route.floors[current]; }
     screenEl.querySelectorAll("[data-fid]").forEach(function (el) {
       var id = el.getAttribute("data-fid");
       el.querySelectorAll(".tgl").forEach(function (b) {
         b.onclick = function () {
-          var v = b.getAttribute("data-v"), old = floorItemValue_(values()[id]), next = old.v === v ? "" : v;
+          var old = floorItemValue_(values()[id]), next = old.v === "bad" ? "ok" : "bad";
           values()[id] = { v:next, note:next === "bad" ? old.note || "" : "" };
-          el.classList.toggle("good", next === "ok"); el.classList.toggle("miss", next === "");
-          el.querySelectorAll(".tgl").forEach(function (x) { x.classList.toggle("on", x.getAttribute("data-v") === next); });
+          el.classList.toggle("good", next !== "bad");
+          el.querySelectorAll(".tgl").forEach(function (x) { x.classList.toggle("on", next === "bad"); });
           el.querySelector(".note").classList.toggle("hidden", next !== "bad");
           if (next !== "bad") el.querySelector(".note input").value = "";
           save();
@@ -1042,6 +1067,10 @@
     document.getElementById("floorAllOk").onclick = function () {
       ids.forEach(function (id) { values()[id] = { v:"ok", note:"" }; }); save(); renderFloorInspection({ mode:mode, floor:current });
     };
+    document.getElementById("floorPrev").onclick = function () {
+      var i = floors.indexOf(current); if (i <= 0) return;
+      route.current = floors[i - 1]; save(); renderFloorInspection({ mode:mode, floor:floors[i - 1] });
+    };
     function collapse() { route.current = current; save(); back(); }
     document.getElementById("floorCollapse").onclick = collapse;
     function finish() { route.current = ""; save(); back(); toast("Поэтажный маршрут сохранён"); }
@@ -1050,8 +1079,8 @@
       if (incomplete.length && !confirm("Не отмечено пунктов: " + incomplete.length + ". Перейти дальше?")) return;
       save();
       if (current === "1" && Number(fd.bottom) < 1) {
-        document.getElementById("floorChoice").innerHTML = '<div class="card" style="border-color:var(--accent)"><h2>Первый этаж заполнен</h2><p>Продолжить осмотр подземных этажей?</p>' +
-          '<button class="btn primary" id="floorBelow">Продолжить на −1</button><button class="btn" id="floorFinish">Завершить маршрут</button><button class="btn" id="floorHide">Свернуть</button></div>';
+        document.getElementById("floorChoice").innerHTML = '<div class="floorChoiceOverlay"><div class="card" style="border-color:var(--accent);margin:0"><h2>Первый этаж заполнен</h2><p>Продолжить осмотр подземных этажей?</p>' +
+          '<button class="btn primary" id="floorBelow">Продолжить на −1</button><button class="btn" id="floorFinish">Завершить маршрут</button><button class="btn" id="floorHide">Свернуть</button></div></div>';
         document.getElementById("floorBelow").onclick = function () { route.current = "-1"; save(); renderFloorInspection({ mode:mode, floor:"-1" }); };
         document.getElementById("floorFinish").onclick = finish;
         document.getElementById("floorHide").onclick = collapse;
@@ -3212,7 +3241,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.11.0";
+  var APP_BUILD = "2.12.0";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
