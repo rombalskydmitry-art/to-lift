@@ -1,10 +1,9 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.7.17
-   v2.7.17: акт приёмки на почту и Диск — PDF формирует САМО ПРИЛОЖЕНИЕ при отправке
-   (тот же рендер, что «Скачать акт (PDF)»); сервер только сохраняет готовый файл.
-   v2.7.16: ОТКАТ на стабильную версию.
-   v2.7.16: ОТКАТ на стабильную версию от 17.11.2026 23:56 — комиссионный акт с настроенными
-   шрифтами (v2.7.3–v2.7.15), прежний бланк акта приёмки, без динамических подписей.
-   В «Настройки → Справка» теперь явно написано «2.7.16-ОТКАТ».
+/* Журнал ТО лифтов — офлайн PWA, v2.8.1
+   v2.8.1: при отправке акта приёмки приложение создаёт новый двухстраничный PDF
+   тем же кодом, что печать, и передаёт его на сервер с меткой app-new-blank.
+   v2.8.0: акт приёмки — подписи пунктов на печатном бланке берутся из файла
+   «Названия пунктов — бланк акта приёмки.xlsx» (it.lab); фон бланка зачищен,
+   подписи рисуются Carlito с кеглем оригинала, не влезает — ужим/перенос в 2 строки.
    v2.7.6: hotfix — main.js теперь вызывает __BOOT_DONE() после старта: без этого
    сторож запуска в index.html считал запуск неудачным и показывал ложную
    «Повреждён сохранённый пакет обновления» + бесконечно чистил кеш.
@@ -950,44 +949,17 @@
     };
   }
 
-
-  // v2.7.17: PDF акта приёмки для отправки на сервер — ТОТ ЖЕ рендер, что «Скачать акт (PDF)».
-  // Бланк (фон + SVG со значениями) растрируется в canvas и собирается в PDF на устройстве;
-  // сервер только сохраняет готовый файл. Возвращает Promise<base64>.
-  function actPdfData_(d) {
-    return new Promise(function (resolve, reject) {
-      try {
-        if (typeof ACT_FORM === "undefined") return reject(new Error("no-act-form"));
-        if (!window.jspdf) return reject(new Error("no-jspdf"));
-        var f = findForm(d.formType, d.lift && d.lift.u);
-        var b = actBuild_(d, f), G = ACT_FORM.g;
-        var pdf = new window.jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
-        function loadImg(src) {
-          return new Promise(function (ok, no) { var im = new Image(); im.onload = function () { ok(im); }; im.onerror = no; im.src = src; });
-        }
-        var pages = [{ bg: ACT_FORM.bg[0], svg: b.p1 }, { bg: ACT_FORM.bg[1], svg: b.p2 }];
-        var chain = Promise.resolve();
-        pages.forEach(function (pg, idx) {
-          chain = chain.then(function () {
-            var canvas = document.createElement("canvas");
-            canvas.width = 1588; canvas.height = 2245;
-            var ctx = canvas.getContext("2d");
-            ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            return loadImg(pg.bg).then(function (im) {
-              ctx.drawImage(im, 0, 0, canvas.width, canvas.height);
-              var svgStr = '<svg viewBox="0 0 ' + G.W + " " + G.H + '" width="1588" height="2245" xmlns="http://www.w3.org/2000/svg">' + pg.svg + "</svg>";
-              var su = URL.createObjectURL(new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" }));
-              return loadImg(su).then(function (sim) {
-                ctx.drawImage(sim, 0, 0, canvas.width, canvas.height);
-                URL.revokeObjectURL(su);
-                if (idx > 0) pdf.addPage();
-                pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, 0, 210, 297, undefined, "FAST");
-              });
-            });
-          });
-        });
-        chain.then(function () { resolve(pdf.output("datauristring").split(",")[1]); }).catch(reject);
-      } catch (e) { reject(e); }
+  function payloadForSend_(d) {
+    var p = payload(d);
+    if (d.formType !== "Акт приёмки") return Promise.resolve(p);
+    var f = findForm(d.formType, d.lift && d.lift.u);
+    if (!f) return Promise.reject(new Error("Не найдена форма акта приёмки — обновите чек-листы"));
+    // Новый PDF создаётся тем же кодом и из того же бланка, что «Печать акта».
+    // Сервер только сохраняет этот файл и прикладывает его к письму.
+    return actPdfBase64FromApp_(d, f).then(function (base64) {
+      p.actPdf = base64;
+      p.actPdfSource = "app-new-blank";
+      return p;
     });
   }
 
@@ -1027,21 +999,15 @@
       if (manual) toast("Нет связи — запись останется в очереди");
       return Promise.resolve();
     }
-    // v2.7.17: для акта приёмки сначала формируем PDF на устройстве (не хранится в очереди).
-    var prep = d.formType === "Акт приёмки"
-      ? actPdfData_(d).catch(function () { return ""; })
-      : Promise.resolve("");
-    return prep.then(function (b64) {
-      var p = payload(d);
-      if (b64) p.actPdf = b64;
+    return payloadForSend_(d).then(function (p) {
       return send(p, ep);
     }).then(function () {
       d.status = "sent"; saveDrafts(a);
       if (state.view === "outbox") render("outbox"); // не сбрасывать другие экраны
-    }).catch(function () {
+    }).catch(function (e) {
       d.status = "fail"; saveDrafts(a);
       if (state.view === "outbox") render("outbox");
-      if (manual) toast("Не удалось отправить — попробуйте позже");
+      if (manual) toast(e && e.message ? e.message : "Не удалось отправить — попробуйте позже");
     });
   }
 
@@ -2068,7 +2034,7 @@
         ? '<p class="hint">Приёмник данных задан в комплекте приложения и обновляется автоматически вместе с ним.<br><span style="word-break:break-all">' + esc(window.APP_ENDPOINT) + "</span></p>"
         : '<p class="hint">Ссылка Google Apps Script (…/exec) — берётся в «Управление развертываниями».</p>' +
           '<input type="url" id="sEndpoint" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(s.endpoint) + '">') + "</div>" +
-      '<div class="card"><h2>Справка</h2><p class="hint">Версия <b>2.7.17 (PDF из приложения)</b> · видов ТО: ' + DATA.forms.length +
+      '<div class="card"><h2>Справка</h2><p class="hint">Версия 2.7 · видов ТО: ' + DATA.forms.length +
       " · лифтов в справочнике: " + DATA.lifts.length + ".<br>Осмотры хранятся в телефоне до отправки.<br>" +
       'Сборка: <b id="appVer">' + esc(window.__appVer || "—") + '</b></p>' +
       '<div style="margin-top:10px"><button type="button" class="miniBtn" id="sUpd">Проверить обновления</button></div></div>' +
@@ -2650,7 +2616,7 @@
         var v = actVal_(d, it.id);
         if (!v) return;
         vals[it.id] = v;
-        var lab = onForm[it.id] && onForm[it.id].lab ? onForm[it.id].lab : it.node;
+        var lab = it.node || (onForm[it.id] && onForm[it.id].lab) || it.id;
         v.lab = lab;
         if (v.bad) defects.push({ id: it.id, lab: lab, text: v.full, sec: String(it.id).slice(0, 2) });
         else if (v.note) notes.push({ id: it.id, lab: lab, text: v.note });
@@ -2692,6 +2658,44 @@
     fieldText(p1, H.org, settings().org || "");
     fieldText(p1, H.addr, ((d.lift && d.lift.a) || "") + (d.lift && d.lift.p ? ", парадная " + d.lift.p : ""));
     fieldText(p1, H.model, d.model || "");
+    // Подписи пунктов на бланке СТЁРТЫ (фон зачищен) — рисуем названия из чек-листа
+    // на тех же местах, с кеглем/насыщенностью оригинала (геометрия g.f[].lg / g.lbl).
+    // Подписи на бланке = короткие названия из файла «Названия пунктов — бланк акта приёмки»
+    // (приходят в пункте как it.lab); полные названия it.node — только в замечаниях/приложении.
+    var names = {};
+    f.sections.forEach(function (s) { s.items.forEach(function (it) { names[it.id] = it.lab || it.node; }); });
+    function labelText(arr, geo, str, rightBound) {
+      if (!geo || str == null || str === "") return;
+      var w = rightBound - geo.x - 2;
+      if (w < 10) return;
+      var size = geo.s || 10, lines = [str];
+      if (actTw_(str, !!geo.bold) * size > w) {
+        size = Math.max(6.5, w / actTw_(str, !!geo.bold));
+        // в оригинале длинные подписи занимают две строки: переносим по словам
+        if (actTw_(str, !!geo.bold) * 6.5 > w + 0.01) {
+          var words = String(str).split(/\s+/), two = null;
+          for (var i = 1; i < words.length; i++) {
+            var l1 = words.slice(0, i).join(" "), l2 = words.slice(i).join(" ");
+            if (actTw_(l1, !!geo.bold) * 6.5 <= w && actTw_(l2, !!geo.bold) * 6.5 <= w) { two = [l1, l2]; break; }
+          }
+          if (!two) { // не нашли разбиение, где обе строки влезают — делим пополам и ужимаем
+            var half = Math.ceil(words.length / 2);
+            two = [words.slice(0, half).join(" "), words.slice(half).join(" ") || " "];
+          }
+          size = Math.max(4, Math.min(geo.s || 10, w / Math.max(actTw_(two[0], !!geo.bold), actTw_(two[1], !!geo.bold))));
+          lines = two;
+        }
+      }
+      if (lines.length === 1) T(arr, geo.x, geo.b, lines[0], size, !!geo.bold);
+      else { T(arr, geo.x, geo.b, lines[1], size, !!geo.bold); T(arr, geo.x, geo.b - size * 1.15, lines[0], size, !!geo.bold); }
+    }
+    G.f.forEach(function (fld) { labelText(p1, fld.lg, names[fld.id], fld.x); });
+    G.grids.forEach(function (gr) {
+      gr.ids.forEach(function (id) {
+        if (!id || !G.lbl || !G.lbl[id]) return;
+        labelText(p2, G.lbl[id], names[id], gr.xs[1] - 1);
+      });
+    });
     // поля бланка: одним размером; не влезло — в нижний блок раздела
     var overflow = [];
     G.f.forEach(function (fld) {
@@ -2738,6 +2742,65 @@
     var remFit = actFitLines_(rtexts, rem[0].w - 4, rem.length);
     remFit.lines.forEach(function (tx, i) { T(p2, rem[i].x + 2, rem[i].b, tx, remFit.size); });
     return { p1: p1.join(""), p2: p2.join("") };
+  }
+
+  // ---------- НОВЫЙ PDF АКТА ДЛЯ ОТПРАВКИ НА СЕРВЕР ----------
+  // Используется тот же ACT_FORM и тот же actBuild_, что при печати из приложения.
+  var actPdfLibPromise_ = null;
+  function ensureActPdfLib_() {
+    if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve();
+    if (actPdfLibPromise_) return actPdfLibPromise_;
+    actPdfLibPromise_ = new Promise(function (resolve, reject) {
+      var sc = document.createElement("script");
+      sc.src = "vendor/jspdf.umd.min.js";
+      sc.onload = function () { resolve(); };
+      sc.onerror = function () { actPdfLibPromise_ = null; reject(new Error("Не загрузился PDF-модуль приложения")); };
+      document.head.appendChild(sc);
+    });
+    return actPdfLibPromise_;
+  }
+  function actPdfLoadImage_(src) {
+    return new Promise(function (resolve, reject) {
+      var im = new Image();
+      im.onload = function () { resolve(im); };
+      im.onerror = function () { reject(new Error("Не загрузилась страница нового бланка")); };
+      im.src = src;
+    });
+  }
+  function actPdfPageCanvas_(svgText, bg) {
+    var canvas = document.createElement("canvas");
+    canvas.width = 1588; canvas.height = 2245;
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    return actPdfLoadImage_(bg).then(function (bgImage) {
+      ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + canvas.width + '" height="' + canvas.height +
+        '" viewBox="0 0 ' + ACT_FORM.g.W + " " + ACT_FORM.g.H + '" font-family="Calibri,Carlito,Arial,Helvetica,sans-serif" fill="#000">' + svgText + "</svg>";
+      var url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+      return actPdfLoadImage_(url).then(function (svgImage) {
+        ctx.drawImage(svgImage, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        return canvas;
+      });
+    });
+  }
+  function actPdfBase64FromApp_(d, f) {
+    if (typeof ACT_FORM === "undefined") return Promise.reject(new Error("Нет данных нового бланка — обновите приложение"));
+    return ensureActPdfLib_().then(function () {
+      var built = actBuild_(d, f);
+      var pdf = new window.jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4", compress: true });
+      return actPdfPageCanvas_(built.p1, ACT_FORM.bg[0]).then(function (page1) {
+        pdf.addImage(page1.toDataURL("image/jpeg", 0.95), "JPEG", 0, 0, 210, 297, undefined, "FAST");
+        return actPdfPageCanvas_(built.p2, ACT_FORM.bg[1]);
+      }).then(function (page2) {
+        pdf.addPage();
+        pdf.addImage(page2.toDataURL("image/jpeg", 0.95), "JPEG", 0, 0, 210, 297, undefined, "FAST");
+        var result = pdf.output("datauristring");
+        var base64 = result.slice(result.indexOf(",") + 1);
+        if (!base64) throw new Error("Приложение не смогло создать PDF акта");
+        return base64;
+      });
+    });
   }
 
   function printActBlank(d, f) {
