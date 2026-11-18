@@ -1,4 +1,8 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.8.7
+/* Журнал ТО лифтов — офлайн PWA, v2.9.0
+   v2.9.0: отдельные замечания через «+ добавить замечание»; вывод под блоками
+   акта приёмки через «;» и отдельными строками в акте комиссионного осмотра.
+   v2.8.8: акт приёмки на двух страницах без пустых листов Safari; ok → +, bad → --;
+   крупные ×, этажи -1 и 16 без переноса, подписи внизу второй страницы.
    v2.8.7: все значения акта приёмки привязаны к координатам чистого действующего DOCX.
    v2.8.6: в «Исходящих» печать акта приёмки использует новый трёхстраничный бланк;
    комиссионная печать повторяет серверные правила v18.9: короткие замечания,
@@ -554,13 +558,49 @@
     return LIFT_MODULES.map(function (m) { return map[m.key]; }).filter(function (m) { return m.ids.length; });
   }
 
+  // Замечания хранятся отдельными записями. Старые comment/sectionComments
+  // автоматически превращаются в списки, а при отправке по-прежнему передаются строками.
+  function remarkList_(value) {
+    var raw = Array.isArray(value) ? value : String(value == null ? "" : value).split(/,|;|\r?\n/);
+    return raw.map(function (x) { return String(x == null ? "" : x).trim(); }).filter(Boolean)
+      .map(function (x) { return x.replace(/[;\r\n]+/g, ", "); });
+  }
+  function recordRemarks_(d) {
+    d = d || {};
+    var general = Object.prototype.hasOwnProperty.call(d, "remarks")
+      ? remarkList_(d.remarks) : remarkList_(d.comment);
+    var sections = {}, source = d.sectionRemarks || {}, legacy = d.sectionComments || {};
+    for (var i = 1; i <= 5; i++) {
+      var key = "А" + i;
+      sections[key] = Object.prototype.hasOwnProperty.call(source, key)
+        ? remarkList_(source[key]) : remarkList_(legacy[key]);
+    }
+    return { general: general, sections: sections };
+  }
+  function legacyRemarks_(list) { return remarkList_(list).join("; "); }
+  function remarkEditorHtml_(key, label, list) {
+    return '<div class="remarkEditor" data-remark-box="' + esc(key) + '" style="margin:12px 14px 6px;padding-top:10px;border-top:1px solid var(--line)">' +
+      '<label style="margin-top:0;font-size:.9rem;color:var(--muted)">' + esc(label) + '</label>' +
+      '<div data-remark-list>' + remarkListHtml_(list) + '</div>' +
+      '<button type="button" class="miniBtn" data-remark-add="' + esc(key) + '">+ добавить замечание</button></div>';
+  }
+  function remarkListHtml_(list) {
+    if (!list.length) return '<div class="hint" style="margin:0 0 8px;font-size:.85rem;color:var(--muted)">Замечаний нет</div>';
+    return '<div style="display:flex;flex-direction:column;gap:6px;margin:0 0 9px">' + list.map(function (text, i) {
+      return '<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--bad-soft)">' +
+        '<span style="flex:1;min-width:0;overflow-wrap:anywhere;font-size:.9rem;line-height:1.35">' + esc(text) + '</span>' +
+        '<button type="button" class="miniBtn" data-remark-del="' + i + '" aria-label="Удалить замечание" style="min-height:30px;padding:3px 9px;flex:none">×</button></div>';
+    }).join("") + '</div>';
+  }
+
   function renderChecklist(params) {
     var f = state.form, l = state.lift;
     titleEl.textContent = f.type + " · № " + l.n;
     var draft = params.draft || lsGet(DRAFT_KEY, null);
     var results = (draft && draft.results) || {};
-    var comment = (draft && draft.comment) || "";
-    var sectionComments = (draft && draft.sectionComments) || {};
+    var remarkData = recordRemarks_(draft || {});
+    var remarks = remarkData.general;
+    var sectionRemarks = remarkData.sections;
     var date = (draft && draft.date) || new Date().toISOString().slice(0, 10);
     var model = (draft && draft.model) || l.model || "";
     var startedAt = (draft && draft.startedAt) || new Date().toISOString();
@@ -639,21 +679,16 @@
           html += "</div>";
         });
       });
-      // Свободный комментарий к блоку (разделу) — только для акта приёмки
+      // Отдельные замечания к блоку — только для акта приёмки.
       if (f.header) {
         var secKey = "А" + (mi + 1);
-        var secCmt = sectionComments[secKey] || sectionComments[m.name] || "";
-        html += '<div class="secComment" style="margin:12px 14px 6px;padding-top:10px;border-top:1px solid var(--line)">' +
-          '<label style="font-size:.9rem;color:var(--muted)">Комментарий к блоку «' + esc(m.name) + '»</label>' +
-          '<textarea class="secCmt" data-seckey="' + esc(secKey) + '" placeholder="Свободный комментарий по разделу (необязательно)…" rows="2">' + esc(secCmt) + '</textarea>' +
-          '</div>';
+        html += remarkEditorHtml_(secKey, 'Замечания к блоку «' + m.name + '»', sectionRemarks[secKey] || []);
       }
       html += '</div></div>';
     });
     html += '</div>'; // .clList
 
-    html += '<label>Общий комментарий</label>' +
-      '<textarea id="cComment" placeholder="Выявленные неисправности и замечания…">' + esc(comment) + "</textarea>" +
+    html += '<div class="card">' + remarkEditorHtml_("general", "Общие замечания", remarks) + '</div>' +
       '<button class="btn primary" id="bSave" style="margin-top:14px">Сохранить осмотр</button>' +
       '<button class="btn" id="bPrint">Печать<small>акта осмотра по печатной форме, с ведомостью замечаний</small></button>';
     screenEl.innerHTML = html;
@@ -741,10 +776,8 @@
 
     function collectSectionComments() {
       var sc = {};
-      screenEl.querySelectorAll("textarea.secCmt").forEach(function (ta) {
-        var key = ta.getAttribute("data-seckey");
-        var v = (ta.value || "").trim();
-        if (key && v) sc[key] = v;
+      Object.keys(sectionRemarks).forEach(function (key) {
+        if (sectionRemarks[key].length) sc[key] = legacyRemarks_(sectionRemarks[key]);
       });
       return sc;
     }
@@ -755,15 +788,31 @@
       lsSet(DRAFT_KEY, {
         formType: f.type, lift: l, model: model,
         date: document.getElementById("cDate").value,
-        results: results, comment: document.getElementById("cComment").value,
-        sectionComments: collectSectionComments(),
+        results: results, comment: legacyRemarks_(remarks), remarks: remarkList_(remarks),
+        sectionComments: collectSectionComments(), sectionRemarks: sectionRemarks,
         startedAt: startedAt, editId: editId
       });
     }
     document.getElementById("cDate").addEventListener("change", saveCurrent);
-    document.getElementById("cComment").addEventListener("input", saveCurrent);
-    screenEl.querySelectorAll("textarea.secCmt").forEach(function (ta) {
-      ta.addEventListener("input", saveCurrent);
+    screenEl.querySelectorAll("[data-remark-box]").forEach(function (box) {
+      box.onclick = function (event) {
+        var add = event.target.closest("[data-remark-add]");
+        var del = event.target.closest("[data-remark-del]");
+        var key = box.getAttribute("data-remark-box");
+        var list = key === "general" ? remarks : (sectionRemarks[key] || []);
+        if (add) {
+          var text = prompt("Введите замечание", "");
+          if (text === null) return;
+          text = text.trim();
+          if (!text) { toast("Замечание не добавлено: текст пустой"); return; }
+          list.push(text.replace(/[;\r\n]+/g, ", "));
+          if (key !== "general") sectionRemarks[key] = list;
+        } else if (del) {
+          list.splice(Number(del.getAttribute("data-remark-del")), 1);
+        } else return;
+        box.querySelector("[data-remark-list]").innerHTML = remarkListHtml_(list);
+        saveCurrent();
+      };
     });
 
     document.getElementById("bSave").onclick = function () {
@@ -780,7 +829,8 @@
         status: "queue",
         formType: f.type, formTitle: f.title,
         lift: l, model: model, date: d.date, results: d.results, comment: d.comment,
-        sectionComments: d.sectionComments || {},
+        remarks: d.remarks || remarkList_(d.comment), sectionComments: d.sectionComments || {},
+        sectionRemarks: d.sectionRemarks || recordRemarks_(d).sections,
         worker: (account() && account().name) || "",
         startedAt: startedAt, finishedAt: new Date().toISOString()
       };
@@ -798,7 +848,8 @@
       printAct({
         formType: f.type, lift: l, model: model,
         date: d.date || date, results: d.results || {}, comment: d.comment || "",
-        sectionComments: d.sectionComments || {},
+        remarks: d.remarks || remarkList_(d.comment), sectionComments: d.sectionComments || {},
+        sectionRemarks: d.sectionRemarks || recordRemarks_(d).sections,
         worker: (account() && account().name) || ""
       });
     };
@@ -923,7 +974,8 @@
     lsSet(DRAFT_KEY, {
       formType: d.formType, lift: d.lift, model: d.model || "",
       date: d.date, results: d.results || {}, comment: d.comment || "",
-      sectionComments: d.sectionComments || {},
+      remarks: d.remarks || remarkList_(d.comment), sectionComments: d.sectionComments || {},
+      sectionRemarks: d.sectionRemarks || recordRemarks_(d).sections,
       startedAt: d.startedAt || new Date().toISOString(), editId: d.id
     });
     a.splice(i, 1);
@@ -956,8 +1008,9 @@
         return { id: k, k: t, v: v, bad: bad, note: r.note || "",
           n: it ? it.node : "", w: it ? it.works : "" };
       }),
-      comment: d.comment || "",
-      sectionComments: d.sectionComments || {}
+      comment: d.comment || "", remarks: d.remarks || remarkList_(d.comment),
+      sectionComments: d.sectionComments || {},
+      sectionRemarks: d.sectionRemarks || recordRemarks_(d).sections
     };
   }
 
@@ -2326,7 +2379,7 @@
   }
 
   // Печать акта осмотра: «Акт приёмки» печатается по действующему
-  // трёхстраничному DOCX-бланку, остальные виды ТО — прежней табличной формой.
+  // двухстраничному бланку на основе действующего DOCX, остальные виды ТО — прежней табличной формой.
   var FLOORS_ = ["-2", "-1", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13",
     "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25"];
   function floorSet_(v) {
@@ -2395,11 +2448,11 @@
         out.push(text);
       });
     });
-    var sc = d.sectionComments || {};
-    Object.keys(sc).forEach(function (k) {
-      if (String(sc[k] || "").trim()) out = out.concat(commissionCommentRowsLocal_("Комментарий " + k, sc[k]));
+    var rd = recordRemarks_(d);
+    Object.keys(rd.sections).forEach(function (k) {
+      rd.sections[k].forEach(function (text) { out.push("Замечание " + k + ": " + text); });
     });
-    if (String(d.comment || "").trim()) out = out.concat(commissionCommentRowsLocal_("Общий комментарий", d.comment));
+    rd.general.forEach(function (text) { out.push("Общее замечание: " + text); });
     return out;
   }
 
@@ -2562,8 +2615,8 @@
   }
 
   /* ACT_FORM:BEGIN — бланк вынесен в act_form.js (генерируется tools/gen_act_form.py) */
-  // ---- «Акт приёмки»: действующий трёхстраничный DOCX-бланк ----
-  // Подложки — три страницы A4. Значения печатаются поверх, на тех же линиях и в тех же
+  // ---- «Акт приёмки»: двухстраничный бланк на основе действующего DOCX ----
+  // Подложки — две страницы A4. Значения печатаются поверх, на тех же линиях и в тех же
   // клетках: координаты соответствуют действующему шаблону (ACT_FORM.g).
   var ACT_UNITS_ = { "А3.2": " %", "А3.3": " мм", "А3.8": " мм" };
   var ACT_MONTHS_ = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
@@ -2611,6 +2664,10 @@
     var r = (d.results || {})[id];
     var v = r && r.v, note = (r && r.note) || "";
     if (v === undefined || v === null || String(v) === "") return null;
+    var raw = String(v).trim().toLowerCase();
+    // Единые обозначения независимо от типа пункта в загруженном чек-листе.
+    if (raw === "ok" || raw === "ок") return { k: "check", t: "+", full: "+", bad: false, note: note };
+    if (raw === "bad" || raw === "бад") return { k: "check", t: "--", full: "--", bad: true, note: note };
     var k = it ? itemType(it) : "state";
     if (k === "check") return v === "bad"
       ? { k: k, t: note || "ЗАМЕЧАНИЕ", full: note || "ЗАМЕЧАНИЕ", bad: true, note: note }
@@ -2628,7 +2685,7 @@
   }
 
   function actBuild_(d, f) {
-    var G = ACT_FORM.g, pages = [[], [], []];
+    var G = ACT_FORM.g, pages = [[], []];
     function T(page, x, y, str, size, bold, underline, center) {
       if (str === "" || str == null) return;
       pages[page - 1].push('<text x="' + x + '" y="' + y + '" font-size="' + (Math.round(size * 100) / 100) + '"' +
@@ -2664,22 +2721,27 @@
         FLOORS_.forEach(function (floor, c) {
           if (!marks[floor]) return;
           var pt = grid.points[r][c];
-          T(grid.page, pt.x, pt.y, '×', 8, false, false, true);
+          T(grid.page, pt.x, pt.y, '×', 11, true, false, true);
         });
       });
     });
 
-    var comment = String(d.comment || '').trim();
-    if (comment) {
-      var rem = G.rem, size = 9, lines;
-      do {
-        lines = actWrap_(comment, rem.w - 4, size, true);
-        if (lines.length <= rem.maxLines) break;
-        size = Math.max(3, Math.round((size - 0.5) * 100) / 100);
-      } while (size > 3);
-      lines.forEach(function (text, i) { T(rem.page, rem.x, rem.b + i * rem.line, text, size, true, true, false); });
+    var rd = recordRemarks_(d);
+    Object.keys(G.free || {}).forEach(function (key) {
+      var entries = rd.sections[key] || [];
+      if (!entries.length) return;
+      var free = G.free[key], fitted = actFitLines_(entries, free.w - 4, free.maxLines);
+      fitted.lines.forEach(function (text, i) {
+        T(free.page, free.x, free.b + i * free.line, text, fitted.size, true, true, false);
+      });
+    });
+    if (rd.general.length) {
+      var rem = G.rem, fitted = actFitLines_(rd.general, rem.w - 4, rem.maxLines);
+      fitted.lines.forEach(function (text, i) {
+        T(rem.page, rem.x, rem.b + i * rem.line, text, fitted.size, true, true, false);
+      });
     }
-    return { pages: pages.map(function (x) { return x.join(''); }), p1: pages[0].join(''), p2: pages[1].join(''), p3: pages[2].join('') };
+    return { pages: pages.map(function (x) { return x.join(''); }), p1: pages[0].join(''), p2: pages[1].join('') };
   }
 
   // ---------- НОВЫЙ PDF АКТА ДЛЯ ОТПРАВКИ НА СЕРВЕР ----------
@@ -2748,12 +2810,14 @@
       '.actpg{position:relative;width:100%;max-width:210mm;margin:0 auto 8px;aspect-ratio:595.3/841.9;background:#fff;box-shadow:0 0 0 1px #ccc;overflow:hidden}' +
       '.actpg img{position:absolute;left:0;top:0;width:100%;height:100%;display:block}' +
       '.actpg svg{position:absolute;left:0;top:0;width:100%;height:100%;font-family:Calibri,Carlito,Arial,Helvetica,sans-serif;fill:#000}' +
-      '@media print{.actpg{width:210mm;max-width:none;height:297mm;aspect-ratio:auto;margin:0;box-shadow:none;break-after:page;page-break-after:always}' +
-      '.actpg:last-child{break-after:auto;page-break-after:auto}}</style>';
+      '@media print{html,body{width:210mm;margin:0!important;padding:0!important;background:#fff}' +
+      '.actpg{width:210mm;max-width:none;height:296.8mm;aspect-ratio:auto;margin:0;padding:0;box-shadow:none;' +
+      'break-after:page;page-break-after:always;break-inside:avoid;page-break-inside:avoid;overflow:hidden}' +
+      '.actpg:last-child{height:296.8mm;break-after:auto;page-break-after:auto}}</style>';
     function page(bg, svg) {
       return '<div class="actpg"><img alt="" src="' + bg + '"><svg viewBox="0 0 ' + G.W + " " + G.H + '" xmlns="http://www.w3.org/2000/svg">' + svg + "</svg></div>";
     }
-    // Действующий трёхстраничный бланк, без старого PDF и отдельного приложения.
+    // Две страницы A4; подписи размещены внизу второй, без отдельного приложения.
     printHTML(css + b.pages.map(function (svg, i) { return page(ACT_FORM.bg[i], svg); }).join(''));
   }
 
@@ -2794,7 +2858,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.8.7";
+  var APP_BUILD = "2.9.0";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
