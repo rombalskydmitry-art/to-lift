@@ -1,4 +1,6 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.8.4
+/* Журнал ТО лифтов — офлайн PWA, v2.8.5
+   v2.8.5: акт приёмки формируется на сервере в DOCX из точного шаблона;
+   приложение отправляет только данные чек-листа, без PDF и base64.
    v2.8.4: ручная проверка сравнивает только хэш оболочки (без ложного сообщения
    об обновлении); после загрузки открывается новая навигация с меткой версии.
    v2.8.3: один черновик не может отправиться одновременно автоматически и вручную;
@@ -956,17 +958,9 @@
   }
 
   function payloadForSend_(d) {
-    var p = payload(d);
-    if (d.formType !== "Акт приёмки") return Promise.resolve(p);
-    var f = findForm(d.formType, d.lift && d.lift.u);
-    if (!f) return Promise.reject(new Error("Не найдена форма акта приёмки — обновите чек-листы"));
-    // Новый PDF создаётся тем же кодом и из того же бланка, что «Печать акта».
-    // Сервер только сохраняет этот файл и прикладывает его к письму.
-    return actPdfBase64FromApp_(d, f).then(function (base64) {
-      p.actPdf = base64;
-      p.actPdfSource = "app-new-blank";
-      return p;
-    });
+    // Акт приёмки заполняется на сервере в DOCX из точного шаблона ACT_TEMPLATE_ID.
+    // PDF и большие base64-вложения из приложения больше не передаются.
+    return Promise.resolve(payload(d));
   }
 
   function send(p, ep) {
@@ -2870,7 +2864,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.8.4";
+  var APP_BUILD = "2.8.5";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
