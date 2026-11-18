@@ -1,4 +1,6 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.12.1
+/* Журнал ТО лифтов — офлайн PWA, v2.12.2
+   v2.12.2: текстовый ввод отрицательных этажей, переходы без предупреждений;
+   после этажа 1 предлагается −1, после −1 предлагается −2.
    v2.12.1: составы маршрутов и разделы 5–8 берутся из актуального чек-листа;
    после этажа 1 всегда предлагается продолжение на −1, нижняя граница исправляется автоматически.
    v2.12.0: новый порядок разделов акта, итоговая проверка, предыдущий этаж;
@@ -735,7 +737,7 @@
       (model ? " · " + esc(model) : "") + "</p></div></div>" +
       '<label>Дата проведения</label><input type="date" id="cDate" value="' + esc(date) + '">' +
       (f.header ? '<div class="row" style="align-items:flex-end;gap:10px"><div style="flex:1"><label>Верхний этаж *</label><input type="number" inputmode="numeric" id="floorTop" min="1" step="1" value="' + esc(floorData.top) + '" placeholder="например, 19"></div>' +
-        '<div style="flex:1"><label>Нижний этаж *</label><input type="number" inputmode="numeric" id="floorBottom" step="1" value="' + esc(floorData.bottom) + '" placeholder="1, -1, -2"></div></div>' +
+        '<div style="flex:1"><label>Нижний этаж *</label><input type="text" inputmode="text" id="floorBottom" autocomplete="off" spellcheck="false" value="' + esc(floorData.bottom) + '" placeholder="1, -1, -2"></div></div>' +
         '<p class="hint">Маршрут формируется сверху вниз, без нулевого этажа.</p>' : '') + '</div>' +
       '<div class="progress" id="prog"></div>';
 
@@ -1101,15 +1103,15 @@
     document.getElementById("floorCollapse").onclick = collapse;
     function finish() { route.current = ""; save(); back(); toast("Поэтажный маршрут сохранён"); }
     function advance() {
-      var incomplete = ids.filter(function (id) { return floorItemValue_(values()[id]).v === ""; });
-      if (incomplete.length && !confirm("Не отмечено пунктов: " + incomplete.length + ". Перейти дальше?")) return;
       save();
-      if (current === "1") {
-        document.getElementById("floorChoice").innerHTML = '<div class="floorChoiceOverlay"><div class="card" style="border-color:var(--accent);margin:0"><h2>Первый этаж заполнен</h2><p>Продолжить осмотр подземных этажей?</p>' +
-          '<button class="btn primary" id="floorBelow">Продолжить на −1</button><button class="btn" id="floorFinish">Завершить маршрут</button><button class="btn" id="floorHide">Свернуть</button></div></div>';
+      var nextFloor = current === "1" ? "-1" : current === "-1" ? "-2" : "";
+      if (nextFloor) {
+        var label = nextFloor.replace("-", "−"), currentLabel = current.replace("-", "−");
+        document.getElementById("floorChoice").innerHTML = '<div class="floorChoiceOverlay"><div class="card" style="border-color:var(--accent);margin:0"><h2>Этаж ' + currentLabel + ' заполнен</h2><p>Продолжить осмотр следующего подземного этажа?</p>' +
+          '<button class="btn primary" id="floorBelow">Продолжить на ' + label + '</button><button class="btn" id="floorFinish">Завершить маршрут</button><button class="btn" id="floorHide">Свернуть</button></div></div>';
         document.getElementById("floorBelow").onclick = function () {
-          if (Number(fd.bottom) >= 1) fd.bottom = "-1";
-          route.current = "-1"; save(); renderFloorInspection({ mode:mode, floor:"-1" });
+          if (Number(fd.bottom) > Number(nextFloor)) fd.bottom = nextFloor;
+          route.current = nextFloor; save(); renderFloorInspection({ mode:mode, floor:nextFloor });
         };
         document.getElementById("floorFinish").onclick = finish;
         document.getElementById("floorHide").onclick = collapse;
@@ -3270,7 +3272,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.12.1";
+  var APP_BUILD = "2.12.2";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
