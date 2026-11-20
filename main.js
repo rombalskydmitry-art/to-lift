@@ -1,4 +1,9 @@
 /* Журнал ТО лифтов — офлайн PWA, v2.13.0
+   v2.13.3: редактор — кнопки пункта ровным рядом справа, одинаковой ширины.
+   v2.13.2: организация подставляется из листа «Аккаунты» (колонка «Организация»),
+   в настройках её вводить больше не нужно.
+   v2.13.1: редактор — текст пункта во всю ширину, кнопки отдельным рядом;
+   графа «Узел» у существующих пунктов меняется только администратором.
    v2.13.0: мастер-аккаунты (логин на «-1») — редактор чек-листов ТО
    (порядок, тексты, варианты ответов, блокировки админа); кнопка
    «Обновить чек-листы с Диска» у мастера заменена на «Редактировать чек-листы».
@@ -136,6 +141,10 @@
   }
   function account() { return lsGet("to_account", null); }
   function isAdmin() { var a = account(); return a && a.role === "admin"; }
+  function orgName() {
+    var a = account();
+    return (a && a.z) || settings().org || "";
+  }
   function isMaster() { var a = account(); return !!(a && /-1$/.test(String(a.login || "").trim())); }
 
   // Единый реестр участков. Старые написания принимаются только как псевдонимы.
@@ -363,7 +372,7 @@
     var html = '<div class="card"><div class="row"><div><h2>' + esc(acc ? (acc.name || acc.login) : "Без аккаунта") + "</h2>" +
       '<p class="hint">' + (acc ? (isAdmin() ? "Администратор · все участки" : "Участок: " + esc(acc.u || "—")) : "Войдите, чтобы работать с таблицей") + "</p></div>" +
       '<button class="btn" id="bChange" style="width:auto;padding:8px 14px;font-size:.85rem">' + (acc ? "Сменить" : "Войти") + "</button></div></div>" +
-      ((acc && acc.name && acc.name !== acc.login && settings().org) ? "" :
+      ((acc && acc.name && acc.name !== acc.login && orgName()) ? "" :
         '<div class="card" style="border-color:var(--bad);background:var(--bad-soft)"><p class="hint">' +
         '<b>Заполните настройки:</b> укажите свои фамилию и инициалы и обслуживающую организацию — ' +
         'это обязательно, данные подставляются в осмотры и акты.</p></div>') +
@@ -501,16 +510,18 @@
       html += '<div class="card"><h2 style="font-size:1rem">' + esc(sec.name) + "</h2>";
       sec.items.forEach(function (it, ii) {
         var locked = !!it.locked;
-        html += '<div class="row" style="align-items:flex-start; gap:6px; padding:6px 0; border-top:1px solid var(--line)">' +
-          '<div style="flex:1; min-width:0"><b>' + esc(it.id) + "</b> " + esc(it.node) +
-          (locked ? ' <span style="color:var(--muted)">· замок</span>' : "") +
-          '<br><small style="color:var(--muted)">' + esc(it.works || "") + (it.req ? " — " + esc(it.req) : "") + "</small></div>";
+        html += '<div style="padding:8px 0; border-top:1px solid var(--line)">' +
+          '<div><b>' + esc(it.id) + "</b> " + esc(it.node) +
+          (locked ? ' <span style="color:var(--muted)">· замок</span>' : "") + "</div>" +
+          '<small style="color:var(--muted)">' + esc(it.works || "") + (it.req ? " — " + esc(it.req) : "") + "</small>";
         if (!locked || admin) {
-          html += '<button class="miniBtn" data-mv="-1" data-s="' + si + '" data-i="' + ii + '"' + (locked && admin ? " disabled" : "") + '>↑</button>' +
-            '<button class="miniBtn" data-mv="1" data-s="' + si + '" data-i="' + ii + '"' + (locked && admin ? " disabled" : "") + '>↓</button>' +
-            '<button class="miniBtn" data-ed="' + si + ':' + ii + '"' + (locked && !admin ? " disabled" : "") + '>✎</button>';
+          var btnW = ' style="width:44px; min-width:44px; padding:8px 0; text-align:center"';
+          html += '<div class="row" style="gap:6px; margin-top:6px; flex-wrap:nowrap; justify-content:flex-end">' +
+            '<button class="miniBtn" data-mv="-1" data-s="' + si + '" data-i="' + ii + '"' + btnW + (locked && admin ? " disabled" : "") + '>↑</button>' +
+            '<button class="miniBtn" data-mv="1" data-s="' + si + '" data-i="' + ii + '"' + btnW + (locked && admin ? " disabled" : "") + '>↓</button>' +
+            '<button class="miniBtn" data-ed="' + si + ':' + ii + '"' + btnW + (locked && !admin ? " disabled" : "") + '>✎</button>';
           if (admin) html += '<button class="miniBtn" data-lk="' + si + ':' + ii + '">' + (locked ? "снять замок" : "замок") + "</button>";
-          html += '<button class="miniBtn" data-del="' + si + ':' + ii + '"' + (locked && !admin ? " disabled" : "") + '>×</button>';
+          html += '<button class="miniBtn" data-del="' + si + ':' + ii + '"' + btnW + (locked && !admin ? " disabled" : "") + '>×</button></div>';
         }
         html += "</div>";
       });
@@ -564,7 +575,7 @@
             if (m && m[1] === prefix && +m[2] > max) max = +m[2];
           });
         });
-        sec.items.push({ id: prefix + "." + (max + 1), node: "", works: "", req: "", type: "check", module: sec.module || "shaft", ph: "" });
+        sec.items.push({ id: prefix + "." + (max + 1), node: "", works: "", req: "", type: "check", module: sec.module || "shaft", ph: "", _isNew: true });
         es.editing = { s: si, i: sec.items.length - 1 };
         markDirty(); renderFormItemEdit();
       };
@@ -613,7 +624,7 @@
       "<label>Раздел</label><select id='fiSec'>" + f.sections.map(function (s2, si) {
         return '<option value="' + si + '"' + (si === ed.s ? " selected" : "") + ">" + esc(s2.name) + "</option>";
       }).join("") + "</select>" +
-      "<label>Узел (название пункта)</label><input type='text' id='fiNode' value=\"" + esc(it.node || "") + "\">" +
+      "<label>Узел (название пункта)" + (admin ? "" : " — меняет только администратор") + "</label><input type='text' id='fiNode' value=\"" + esc(it.node || "") + "\"" + (admin || it._isNew ? "" : " disabled style='background:#f1f4f8;color:var(--muted)'") + ">" +
       "<label>Работы</label><textarea id='fiWorks'>" + esc(it.works || "") + "</textarea>" +
       "<label>Требование</label><textarea id='fiReq'>" + esc(it.req || "") + "</textarea>" +
       "<label>Тип ответа</label><select id='fiType'>" + typeOpts.map(function (t) {
@@ -632,7 +643,7 @@
     document.getElementById("fiType").onchange = syncOptsVis; syncOptsVis();
     document.getElementById("fiOk").onclick = function () {
       var newS = +document.getElementById("fiSec").value;
-      it.node = document.getElementById("fiNode").value.trim();
+      if (admin || it._isNew) it.node = document.getElementById("fiNode").value.trim();
       it.works = document.getElementById("fiWorks").value.trim();
       it.req = document.getElementById("fiReq").value.trim();
       it.type = document.getElementById("fiType").value;
@@ -1503,7 +1514,7 @@
       id: d.id, created: d.created, worker: d.worker, date: d.date,
       formType: d.formType, formTitle: d.formTitle,
       u: d.lift.u, z: d.lift.z, a: d.lift.a, p: d.lift.p, n: d.lift.n, g: d.lift.g,
-      model: d.model || "", org: settings().org || "",
+      model: d.model || "", org: orgName(),
       floorData:d.floorData || null, floorTop:d.floorTop || "", floorBottom:d.floorBottom || "",
       startedAt: d.startedAt || "", finishedAt: d.finishedAt || "",
       login: acc.login || "", pwd: acc.pwd || "", tok: acc.tok || "",
@@ -1537,6 +1548,8 @@
     // no-cors: ответ Google не читаем (он идёт через редирект),
     // но запрос гарантированно выполняется на стороне Apps Script.
     // Подтверждение — строка «запрос получен» на листе «Лог» в таблице.
+    var accS = account() || {};
+    if (accS.tok && !p.tok) p.tok = accS.tok;
     return fetch(ep, {
       method: "POST",
       mode: "no-cors",
@@ -2747,16 +2760,16 @@
     var acc = account();
     var p = profileInfo() || {};
     var curName = (acc && acc.name && acc.name !== acc.login) ? acc.name : (p.name || "");
-    var curOrg = s.org || p.org || "";
+    var curOrg = (acc && acc.z) || s.org || p.org || "";
     screenEl.innerHTML =
       '<div class="card"><h2>Аккаунт</h2>' +
       '<p class="hint">' + (acc ? esc(acc.name || acc.login) + " · " + (acc.role === "admin" ? "администратор" : "участок " + esc(acc.u)) : "Не выполнен вход") + "</p></div>" +
       '<div class="card"><h2>Фамилия и инициалы *</h2>' +
       '<p class="hint">Подставляется в осмотры и печатные акты, сохраняется в лист «Аккаунты». Заполнение обязательно.</p>' +
       '<input type="text" id="sName" placeholder="Иванов И. И." value="' + esc(curName) + '"></div>' +
-      '<div class="card"><h2>Обслуживающая организация *</h2>' +
-      '<p class="hint">Подставляется в печатный акт осмотра, сохраняется в таблице. Заполнение обязательно.</p>' +
-      '<input type="text" id="sOrg" placeholder="ООО «…»" value="' + esc(curOrg) + '"></div>' +
+      '<div class="card"><h2>Обслуживающая организация</h2>' +
+      '<p class="hint">Подставляется в печатный акт осмотра. Берётся из листа «Аккаунты» вашей таблицы — вручную вводить не нужно.</p>' +
+      '<p style="font-weight:600; margin:4px 0 0">' + esc(curOrg || "— не указана в листе «Аккаунты» —") + "</p></div>" +
       '<div class="card"><h2>Таблица</h2>' +
       (window.APP_ENDPOINT && window.APP_ENDPOINT.indexOf("ВСТАВИТЬ") < 0
         ? '<p class="hint">Приёмник данных задан в комплекте приложения и обновляется автоматически вместе с ним.<br><span style="word-break:break-all">' + esc(window.APP_ENDPOINT) + "</span></p>"
@@ -2770,13 +2783,13 @@
       (acc ? '<button class="btn danger" id="sOut">Выйти из аккаунта</button>' : "");
     document.getElementById("sSave").onclick = function () {
       var name = document.getElementById("sName").value.trim();
-      var org = document.getElementById("sOrg").value.trim();
+      var org = orgName();
       var ok = true;
-      [["sName", name], ["sOrg", org]].forEach(function (x) {
+      [["sName", name]].forEach(function (x) {
         document.getElementById(x[0]).classList.toggle("miss", !x[1]);
         if (!x[1]) ok = false;
       });
-      if (!ok) { toast("Заполните обязательные поля: ФИО и организация"); return; }
+      if (!ok) { toast("Заполните обязательное поле: ФИО"); return; }
       lsSet("to_settings", {
         endpoint: document.getElementById("sEndpoint") ? document.getElementById("sEndpoint").value.trim() : s.endpoint,
         org: org
@@ -3257,7 +3270,7 @@
             return '<tr><td class="c">' + (i + 1) + '</td><td class="c">' + esc(x[0]) + '</td><td>' + esc(x[1]) + '</td><td class="v">' + esc(x[2]) + '</td></tr>';
           }).join("") + '</table>'
         : '<p class="ah">Замечаний нет.</p>');
-    var org = settings().org || "_______________________";
+    var org = orgName() || "_______________________";
     var dp = String(d.date || "").split("-"); // гггг-мм-дд
     var day = dp[2] || "____", mon = dp[1] || "______", yr = dp[0] ? dp[0].slice(2) : "____";
     printHTML(
@@ -3367,7 +3380,7 @@
       field(H.yr, dp[0].slice(2), false, 10);
     }
     field(H.num, (d.lift && d.lift.n) || '', false, 10);
-    field(H.org, settings().org || '', false, 9);
+    field(H.org, orgName(), false, 9);
     field(H.addr, ((d.lift && d.lift.a) || '') + (d.lift && d.lift.p ? ', парадная ' + d.lift.p : ''), false, 9);
     field(H.model, d.model || '', false, 9);
 
@@ -3521,7 +3534,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.13.0";
+  var APP_BUILD = "2.13.3";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
