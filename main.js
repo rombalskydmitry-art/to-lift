@@ -1,4 +1,7 @@
 /* Журнал ТО лифтов — офлайн PWA, v2.13.0
+   v2.13.5: тестовые лифты TEST-001/002 участка «Тест»; закреплённый порядок
+   чек-листов в меню (ежемесячный…годовой, акт приёмки последним); исправлено
+   пропадание кнопки «назад», если выйти с экрана до всплывающего сообщения.
    v2.13.4: тестовый участок «Тест»; значок замка вместо слова;
    ровные кнопки «Сохранить»/«Отмена» в редакторе.
    v2.13.3: редактор — кнопки пункта ровным рядом справа, одинаковой ширины.
@@ -194,6 +197,13 @@
         if (!f.title) f.title = builtinAct.title;
       }
     });
+    // Закреплённый порядок в меню: ежемесячный → годовой, акт приёмки последним
+    var FORM_ORDER = ["Ежемесячное", "Квартальное", "Полугодовое", "Годовое", "Акт приёмки"];
+    forms.sort(function (a, b) {
+      var ia = FORM_ORDER.indexOf(a.type), ib = FORM_ORDER.indexOf(b.type);
+      if (ia < 0) ia = FORM_ORDER.length; if (ib < 0) ib = FORM_ORDER.length;
+      return ia - ib || String(a.type).localeCompare(String(b.type), "ru");
+    });
     return forms;
   }
   function formsForArea(area) {
@@ -223,6 +233,12 @@
   // справочник лифтов: synced-версия поверх встроенной
   var syncedLifts = lsGet("to_lifts", null);
   if (syncedLifts && syncedLifts.length) DATA.lifts = syncedLifts;
+  // Тестовый участок «Тест»: два лифта всегда в справочнике, сервер их не перезаписывает
+  ["TEST-001", "TEST-002"].forEach(function (n, i) {
+    if (!DATA.lifts.some(function (l) { return l.n === n; })) {
+      DATA.lifts.push({ u:"Тест", z:'ООО СП "Лифт Комплекс"', a:"Тестовая ул., д. 1", p:String(i + 1), n:n, g:630 });
+    }
+  });
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -429,12 +445,12 @@
     var fr = document.getElementById("fRefresh");
     if (fr) fr.onclick = function () {
       toast("Загружаю чек-листы участка…");
-      refreshForms(area).then(function (ok) { toast(ok ? "Чек-листы обновлены" : "Не удалось обновить — показана сохранённая версия"); renderForms(); });
+      refreshForms(area).then(function (ok) { toast(ok ? "Чек-листы обновлены" : "Не удалось обновить — показана сохранённая версия"); if (state.view === "forms") renderForms(); });
     };
     var fe = document.getElementById("fEdit");
     if (fe) fe.onclick = function () {
       toast("Загружаю актуальные чек-листы…");
-      refreshForms(area).then(function () { go("formedit"); });
+      refreshForms(area).then(function () { if (state.view === "forms") go("formedit"); });
     };
     screenEl.querySelectorAll("button[data-t]").forEach(function (b) {
       b.onclick = function () {
@@ -453,7 +469,7 @@
         else go("lift", { form: f });
       };
     });
-    if (arguments[0] && arguments[0].refresh) refreshForms(area).then(function () { renderForms(); });
+    if (arguments[0] && arguments[0].refresh) refreshForms(area).then(function () { if (state.view === "forms") renderForms(); });
   }
 
   // ---------- РЕДАКТОР ЧЕК-ЛИСТОВ (мастер «-1» / администратор) ----------
@@ -3537,7 +3553,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.13.4";
+  var APP_BUILD = "2.13.5";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
