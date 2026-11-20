@@ -1,4 +1,6 @@
 /* Журнал ТО лифтов — офлайн PWA, v2.13.0
+   v2.13.4: тестовый участок «Тест»; значок замка вместо слова;
+   ровные кнопки «Сохранить»/«Отмена» в редакторе.
    v2.13.3: редактор — кнопки пункта ровным рядом справа, одинаковой ширины.
    v2.13.2: организация подставляется из листа «Аккаунты» (колонка «Организация»),
    в настройках её вводить больше не нужно.
@@ -153,7 +155,8 @@
     { name:"Грин-2", aliases:["грин-2", "грин 2", "грин2", "гринландия-2", "гринландия 2", "гринландия2"] },
     { name:"Чистое небо", aliases:["чистое небо", "чистоенебо"] },
     { name:"Город Звезд", aliases:["город звезд", "город-звезд", "городзвезд", "город звёзд", "город-звёзд", "саратовка", "новосаратовка", "ново-саратовка", "ново саратовка"] },
-    { name:"Третий", aliases:["третий", "3 участок", "участок 3", "третий участок"] }
+    { name:"Третий", aliases:["третий", "3 участок", "участок 3", "третий участок"] },
+    { name:"Тест", aliases:["тест", "test", "тестовый"] }
   ];
   function normArea(s) {
     return String(s || "").toLowerCase().replace(/ё/g, "е").replace(/[_.\-–—]/g, " ").replace(/\s+/g, " ").trim();
@@ -500,11 +503,11 @@
     var f = es.form;
     var html = '<div class="card"><h2>' + esc(f.type) + '</h2>' +
       '<p class="hint">' + esc(area) + (es.dirty ? " · есть несохранённые правки" : "") + "</p>" +
-      '<div class="row" style="gap:8px">' +
-      '<button class="btn primary" id="feSave" style="flex:1">Сохранить</button>' +
-      '<button class="btn" id="feCancel" style="flex:1">Отмена</button></div></div>';
-    if (admin) html += '<p class="hint" style="margin:4px 6px">Значок «замок» — пункт нельзя менять мастеру. Ставить и снимать замок может только администратор.</p>';
-    else html += '<p class="hint" style="margin:4px 6px">Пункты со значком «замок» заблокированы администратором.</p>';
+      '<div class="row" style="gap:8px; align-items:stretch">' +
+      '<button class="btn primary" id="feSave" style="flex:1; min-height:52px; display:flex; align-items:center; justify-content:center">Сохранить</button>' +
+      '<button class="btn" id="feCancel" style="flex:1; min-height:52px; display:flex; align-items:center; justify-content:center">Отмена</button></div></div>';
+    if (admin) html += '<p class="hint" style="margin:4px 6px">Значок 🔒 — пункт нельзя менять мастеру. Ставить и снимать 🔒 может только администратор.</p>';
+    else html += '<p class="hint" style="margin:4px 6px">Пункты со значком 🔒 заблокированы администратором.</p>';
 
     f.sections.forEach(function (sec, si) {
       html += '<div class="card"><h2 style="font-size:1rem">' + esc(sec.name) + "</h2>";
@@ -512,7 +515,7 @@
         var locked = !!it.locked;
         html += '<div style="padding:8px 0; border-top:1px solid var(--line)">' +
           '<div><b>' + esc(it.id) + "</b> " + esc(it.node) +
-          (locked ? ' <span style="color:var(--muted)">· замок</span>' : "") + "</div>" +
+          (locked ? ' <span>🔒</span>' : "") + "</div>" +
           '<small style="color:var(--muted)">' + esc(it.works || "") + (it.req ? " — " + esc(it.req) : "") + "</small>";
         if (!locked || admin) {
           var btnW = ' style="width:44px; min-width:44px; padding:8px 0; text-align:center"';
@@ -520,7 +523,7 @@
             '<button class="miniBtn" data-mv="-1" data-s="' + si + '" data-i="' + ii + '"' + btnW + (locked && admin ? " disabled" : "") + '>↑</button>' +
             '<button class="miniBtn" data-mv="1" data-s="' + si + '" data-i="' + ii + '"' + btnW + (locked && admin ? " disabled" : "") + '>↓</button>' +
             '<button class="miniBtn" data-ed="' + si + ':' + ii + '"' + btnW + (locked && !admin ? " disabled" : "") + '>✎</button>';
-          if (admin) html += '<button class="miniBtn" data-lk="' + si + ':' + ii + '">' + (locked ? "снять замок" : "замок") + "</button>";
+          if (admin) html += '<button class="miniBtn" data-lk="' + si + ':' + ii + '"' + btnW + '>' + (locked ? "🔓" : "🔒") + "</button>";
           html += '<button class="miniBtn" data-del="' + si + ':' + ii + '"' + btnW + (locked && !admin ? " disabled" : "") + '>×</button></div>';
         }
         html += "</div>";
@@ -3534,7 +3537,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.13.3";
+  var APP_BUILD = "2.13.4";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
