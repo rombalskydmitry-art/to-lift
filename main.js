@@ -1,4 +1,10 @@
-/* Журнал ТО лифтов — офлайн PWA, v2.12.4
+/* Журнал ТО лифтов — офлайн PWA, v2.13.0
+   v2.13.0: мастер-аккаунты (логин на «-1») — редактор чек-листов ТО
+   (порядок, тексты, варианты ответов, блокировки админа); кнопка
+   «Обновить чек-листы с Диска» у мастера заменена на «Редактировать чек-листы».
+   Один аккаунт = одно устройство: вход выдаёт токен сессии, старое устройство
+   вытесняется на экран входа.
+   v2.12.4
    v2.12.4: карточка лифта — новые сводные колонки ПК группируются по модулям
    («Станция управления», «Машинное отделение (прочее)» → машинное; «Крыша кабины» → шахта).
    v2.12.3: встроенная резервная форма акта обновлена по актуальному чек-листу;
@@ -130,6 +136,7 @@
   }
   function account() { return lsGet("to_account", null); }
   function isAdmin() { var a = account(); return a && a.role === "admin"; }
+  function isMaster() { var a = account(); return !!(a && /-1$/.test(String(a.login || "").trim())); }
 
   // Единый реестр участков. Старые написания принимаются только как псевдонимы.
   var AREAS = [
@@ -218,10 +225,22 @@
   function api(params) {
     var ep = settings().endpoint;
     if (!ep) return Promise.reject(new Error("no-endpoint"));
+    var acc = account() || {};
+    params = params || {};
+    if (acc.tok && !params.tok) params.tok = acc.tok;
     var q = Object.keys(params).map(function (k) {
       return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
     }).join("&");
-    return fetch(ep + "?" + q, { method: "GET", mode: "cors" }).then(function (r) { return r.json(); });
+    return fetch(ep + "?" + q, { method: "GET", mode: "cors" }).then(function (r) { return r.json(); }).then(function (r) {
+      if (r && r.error === "session-replaced") sessionKicked();
+      return r;
+    });
+  }
+  function sessionKicked() {
+    lsSet("to_account", null);
+    state.stack = [];
+    render("login");
+    toast("Вход выполнен с другого устройства — эта сессия закрыта");
   }
 
   // ---------- навигация ----------
@@ -258,7 +277,8 @@
       inspsummary: renderInspectionSummary,
       actarchive: renderActArchive,
       commissionacts: renderCommissionActs,
-      settings: renderSettings
+      settings: renderSettings,
+      formedit: renderFormEdit
     })[view](params || {});
     updateNet();
   }
@@ -322,7 +342,7 @@
       if (!navigator.onLine) { toast("Нет связи — доступен вход «Работать офлайн» для сохранённого аккаунта"); return; }
       api({ what: "auth", login: login, pwd: pwd }).then(function (r) {
         if (!r.ok) { toast("Отказ: " + (r.error || "проверьте логин и пароль")); return; }
-        lsSet("to_account", { login: login, pwd: pwd, role: r.role, u: canonicalArea(r.u || ""), z: r.z || "", name: r.name || login });
+        lsSet("to_account", { login: login, pwd: pwd, role: r.role, u: canonicalArea(r.u || ""), z: r.z || "", name: r.name || login, tok: r.token || "" });
         toast("Вошли как " + (r.name || login));
         refreshLifts();
         if (r.role !== "admin") refreshForms(r.u);
@@ -376,8 +396,15 @@
         return '<option value="' + esc(a.name) + '"' + (a.name === area ? " selected" : "") + '>' + esc(a.name) + '</option>';
       }).join("") + '</select>';
     } else html += '<p class="hint">' + esc(area) + '</p>';
-    html += '<p class="hint">Пункты редактируются в отдельной Google-таблице участка на Диске.</p>' +
-      '<button class="btn" id="fRefresh">Обновить чек-листы с Диска</button></div><div class="list">';
+    var canEditForms = isAdmin() || isMaster();
+    if (canEditForms) {
+      html += '<button class="btn primary" id="fEdit">Редактировать чек-листы<small>порядок, тексты и варианты ответов</small></button>';
+      if (isAdmin()) html += '<button class="btn" id="fRefresh">Обновить чек-листы с Диска</button>';
+    } else {
+      html += '<p class="hint">Пункты редактируются мастером участка или администратором.</p>' +
+        '<button class="btn" id="fRefresh">Обновить чек-листы с Диска</button>';
+    }
+    html += '</div><div class="list">';
     forms.forEach(function (f) {
       var n = f.sections.reduce(function (a, s) { return a + s.items.length; }, 0);
       html += '<button class="btn" data-t="' + esc(f.type) + '">' + esc(f.type) +
@@ -387,9 +414,15 @@
     screenEl.innerHTML = html;
     var fa = document.getElementById("fArea");
     if (fa) fa.onchange = function () { state.formArea = canonicalArea(fa.value); renderForms({ refresh:true }); };
-    document.getElementById("fRefresh").onclick = function () {
+    var fr = document.getElementById("fRefresh");
+    if (fr) fr.onclick = function () {
       toast("Загружаю чек-листы участка…");
       refreshForms(area).then(function (ok) { toast(ok ? "Чек-листы обновлены" : "Не удалось обновить — показана сохранённая версия"); renderForms(); });
+    };
+    var fe = document.getElementById("fEdit");
+    if (fe) fe.onclick = function () {
+      toast("Загружаю актуальные чек-листы…");
+      refreshForms(area).then(function () { go("formedit"); });
     };
     screenEl.querySelectorAll("button[data-t]").forEach(function (b) {
       b.onclick = function () {
@@ -409,6 +442,211 @@
       };
     });
     if (arguments[0] && arguments[0].refresh) refreshForms(area).then(function () { renderForms(); });
+  }
+
+  // ---------- РЕДАКТОР ЧЕК-ЛИСТОВ (мастер «-1» / администратор) ----------
+  var FORM_EDIT_TYPES = ["Ежемесячное", "Квартальное", "Полугодовое", "Годовое"];
+  function editState() {
+    if (!state.edit) state.edit = { type: "", form: null, dirty: false, editing: null };
+    return state.edit;
+  }
+  function renderFormEdit() {
+    titleEl.textContent = "Редактор чек-листов";
+    var acc = account() || {}, admin = isAdmin();
+    var area = admin ? canonicalArea(state.formArea || "Третий") : canonicalArea(acc.u || "");
+    if (!admin && !isMaster()) { toast("Нет доступа"); back(); return; }
+    var es = editState();
+    var forms = formsForArea(area).filter(function (f) { return FORM_EDIT_TYPES.indexOf(f.type) >= 0; });
+
+    if (!es.form) {
+      var html = '<div class="card"><h2>Чек-листы участка</h2>';
+      if (admin) {
+        html += '<label>Участок</label><select id="feArea">' + AREAS.map(function (a) {
+          return '<option value="' + esc(a.name) + '"' + (a.name === area ? " selected" : "") + '>' + esc(a.name) + '</option>';
+        }).join("") + '</select>';
+      } else html += '<p class="hint">' + esc(area) + '</p>';
+      html += '<p class="hint">Редактируются только чек-листы ТО. Акт приёмки и акт комиссионного осмотра не меняются.</p></div><div class="list">';
+      forms.forEach(function (f) {
+        var n = f.sections.reduce(function (a, s) { return a + s.items.length; }, 0);
+        html += '<button class="btn" data-t="' + esc(f.type) + '">' + esc(f.type) + '<small>' + n + ' пунктов</small></button>';
+      });
+      html += "</div>";
+      screenEl.innerHTML = html;
+      var fa = document.getElementById("feArea");
+      if (fa) fa.onchange = function () { state.formArea = canonicalArea(fa.value); state.edit = null; renderFormEdit(); };
+      screenEl.querySelectorAll("button[data-t]").forEach(function (b) {
+        b.onclick = function () {
+          var f = forms.find(function (x) { return x.type === b.getAttribute("data-t"); });
+          if (!f) return;
+          es.type = f.type;
+          es.form = JSON.parse(JSON.stringify(f));
+          es.dirty = false; es.editing = null;
+          renderFormEdit();
+        };
+      });
+      return;
+    }
+
+    // ——— экран правки формы ———
+    var f = es.form;
+    var html = '<div class="card"><h2>' + esc(f.type) + '</h2>' +
+      '<p class="hint">' + esc(area) + (es.dirty ? " · есть несохранённые правки" : "") + "</p>" +
+      '<div class="row" style="gap:8px">' +
+      '<button class="btn primary" id="feSave" style="flex:1">Сохранить</button>' +
+      '<button class="btn" id="feCancel" style="flex:1">Отмена</button></div></div>';
+    if (admin) html += '<p class="hint" style="margin:4px 6px">Значок «замок» — пункт нельзя менять мастеру. Ставить и снимать замок может только администратор.</p>';
+    else html += '<p class="hint" style="margin:4px 6px">Пункты со значком «замок» заблокированы администратором.</p>';
+
+    f.sections.forEach(function (sec, si) {
+      html += '<div class="card"><h2 style="font-size:1rem">' + esc(sec.name) + "</h2>";
+      sec.items.forEach(function (it, ii) {
+        var locked = !!it.locked;
+        html += '<div class="row" style="align-items:flex-start; gap:6px; padding:6px 0; border-top:1px solid var(--line)">' +
+          '<div style="flex:1; min-width:0"><b>' + esc(it.id) + "</b> " + esc(it.node) +
+          (locked ? ' <span style="color:var(--muted)">· замок</span>' : "") +
+          '<br><small style="color:var(--muted)">' + esc(it.works || "") + (it.req ? " — " + esc(it.req) : "") + "</small></div>";
+        if (!locked || admin) {
+          html += '<button class="miniBtn" data-mv="-1" data-s="' + si + '" data-i="' + ii + '"' + (locked && admin ? " disabled" : "") + '>↑</button>' +
+            '<button class="miniBtn" data-mv="1" data-s="' + si + '" data-i="' + ii + '"' + (locked && admin ? " disabled" : "") + '>↓</button>' +
+            '<button class="miniBtn" data-ed="' + si + ':' + ii + '"' + (locked && !admin ? " disabled" : "") + '>✎</button>';
+          if (admin) html += '<button class="miniBtn" data-lk="' + si + ':' + ii + '">' + (locked ? "снять замок" : "замок") + "</button>";
+          html += '<button class="miniBtn" data-del="' + si + ':' + ii + '"' + (locked && !admin ? " disabled" : "") + '>×</button>';
+        }
+        html += "</div>";
+      });
+      html += '<button class="miniBtn" data-add="' + si + '" style="margin-top:8px">+ пункт</button></div>';
+    });
+    html += '<button class="btn" id="feAddSec">+ Добавить раздел</button>';
+    screenEl.innerHTML = html;
+
+    function markDirty() { es.dirty = true; }
+    screenEl.querySelectorAll("button[data-mv]").forEach(function (b) {
+      b.onclick = function () {
+        var si = +b.getAttribute("data-s"), ii = +b.getAttribute("data-i"), d = +b.getAttribute("data-mv");
+        var items = f.sections[si].items, j = ii + d;
+        if (j < 0 || j >= items.length) { toast(d < 0 ? "Уже первый в разделе" : "Уже последний в разделе"); return; }
+        if (items[j].locked && !admin) { toast("Соседний пункт заблокирован"); return; }
+        var t = items[ii]; items[ii] = items[j]; items[j] = t;
+        markDirty(); renderFormEdit();
+      };
+    });
+    screenEl.querySelectorAll("button[data-del]").forEach(function (b) {
+      b.onclick = function () {
+        var pp = b.getAttribute("data-del").split(":"), si = +pp[0], ii = +pp[1];
+        var it = f.sections[si].items[ii];
+        if (!confirm("Удалить пункт " + it.id + " «" + it.node + "»?")) return;
+        f.sections[si].items.splice(ii, 1);
+        markDirty(); renderFormEdit();
+      };
+    });
+    screenEl.querySelectorAll("button[data-lk]").forEach(function (b) {
+      b.onclick = function () {
+        var pp = b.getAttribute("data-lk").split(":"), si = +pp[0], ii = +pp[1];
+        f.sections[si].items[ii].locked = !f.sections[si].items[ii].locked;
+        markDirty(); renderFormEdit();
+      };
+    });
+    screenEl.querySelectorAll("button[data-ed]").forEach(function (b) {
+      b.onclick = function () {
+        var pp = b.getAttribute("data-ed").split(":");
+        es.editing = { s: +pp[0], i: +pp[1] };
+        renderFormItemEdit();
+      };
+    });
+    screenEl.querySelectorAll("button[data-add]").forEach(function (b) {
+      b.onclick = function () {
+        var si = +b.getAttribute("data-add"), sec = f.sections[si];
+        var prefix = sec.items.length ? String(sec.items[0].id).replace(/\.[^.]*$/, "") : String(si + 1);
+        var max = 0;
+        f.sections.forEach(function (s2) {
+          s2.items.forEach(function (it) {
+            var m = /^(.+)\.(\d+)$/.exec(String(it.id));
+            if (m && m[1] === prefix && +m[2] > max) max = +m[2];
+          });
+        });
+        sec.items.push({ id: prefix + "." + (max + 1), node: "", works: "", req: "", type: "check", module: sec.module || "shaft", ph: "" });
+        es.editing = { s: si, i: sec.items.length - 1 };
+        markDirty(); renderFormItemEdit();
+      };
+    });
+    document.getElementById("feAddSec").onclick = function () {
+      var name = prompt("Название нового раздела:");
+      if (!name || !name.trim()) return;
+      f.sections.push({ name: name.trim(), module: "shaft", items: [] });
+      markDirty(); renderFormEdit();
+    };
+    document.getElementById("feCancel").onclick = function () {
+      if (es.dirty && !confirm("Отменить несохранённые правки?")) return;
+      state.edit = null; renderFormEdit();
+    };
+    document.getElementById("feSave").onclick = function () {
+      // валидация: у всех пунктов заполнены id и узел
+      var bad = null;
+      f.sections.forEach(function (s2) {
+        s2.items.forEach(function (it) {
+          if (!String(it.id || "").trim() || !String(it.node || "").trim()) bad = it;
+        });
+      });
+      if (bad) { toast("Пункт «" + (bad.id || "?") + "» без названия узла — заполните или удалите"); return; }
+      if (!confirm("Сохранить чек-лист «" + f.type + "» для участка «" + area + "»? Изменения увидят все механики участка после обновления чек-листов.")) return;
+      toast("Сохраняю…");
+      var locks = [];
+      f.sections.forEach(function (s2) { s2.items.forEach(function (it) { if (it.locked) locks.push(it.id); }); });
+      sendForResponse({ type: "saveform", area: area, formType: f.type, form: f, locks: locks }).then(function (r) {
+        if (!r || !r.ok) { toast("Не сохранено: " + (r && r.error || "нет связи")); return; }
+        var cache = formsCache(); delete cache[canonicalArea(area)]; lsSet("to_forms_by_area", cache);
+        toast("Сохранено: " + (r.items || "") + " пунктов");
+        state.edit = null;
+        refreshForms(area).then(function () { renderFormEdit(); });
+      }).catch(function () { toast("Не удалось связаться со скриптом"); });
+    };
+  }
+
+  function renderFormItemEdit() {
+    var es = editState(), f = es.form, ed = es.editing;
+    var admin = isAdmin();
+    if (!f || !ed) { renderFormEdit(); return; }
+    var it = f.sections[ed.s].items[ed.i];
+    titleEl.textContent = "Пункт " + it.id;
+    var typeOpts = [["check", "Отметка (норма/замечание)"], ["state", "Выбор из вариантов"], ["count", "Количество"], ["floors", "Поэтажно"]];
+    var html = '<div class="card"><h2>' + esc(f.type) + " · " + esc(it.id) + "</h2>" +
+      "<label>Раздел</label><select id='fiSec'>" + f.sections.map(function (s2, si) {
+        return '<option value="' + si + '"' + (si === ed.s ? " selected" : "") + ">" + esc(s2.name) + "</option>";
+      }).join("") + "</select>" +
+      "<label>Узел (название пункта)</label><input type='text' id='fiNode' value=\"" + esc(it.node || "") + "\">" +
+      "<label>Работы</label><textarea id='fiWorks'>" + esc(it.works || "") + "</textarea>" +
+      "<label>Требование</label><textarea id='fiReq'>" + esc(it.req || "") + "</textarea>" +
+      "<label>Тип ответа</label><select id='fiType'>" + typeOpts.map(function (t) {
+        return '<option value="' + t[0] + '"' + (it.type === t[0] ? " selected" : "") + ">" + t[1] + "</option>";
+      }).join("") + "</select>" +
+      "<div id='fiOptsWrap'><label>Варианты ответов (по одному в строке, первый — норма)</label><textarea id='fiOpts'>" + esc((it.options || []).join("\n")) + "</textarea></div>" +
+      "<label>Подсказка</label><input type='text' id='fiPh' value=\"" + esc(it.ph || "") + "\">" +
+      '<div class="row" style="gap:8px; margin-top:12px">' +
+      '<button class="btn primary" id="fiOk" style="flex:1">Готово</button>' +
+      '<button class="btn" id="fiBack" style="flex:1">Назад</button></div></div>';
+    screenEl.innerHTML = html;
+    function syncOptsVis() {
+      document.getElementById("fiOptsWrap").style.display =
+        document.getElementById("fiType").value === "state" ? "" : "none";
+    }
+    document.getElementById("fiType").onchange = syncOptsVis; syncOptsVis();
+    document.getElementById("fiOk").onclick = function () {
+      var newS = +document.getElementById("fiSec").value;
+      it.node = document.getElementById("fiNode").value.trim();
+      it.works = document.getElementById("fiWorks").value.trim();
+      it.req = document.getElementById("fiReq").value.trim();
+      it.type = document.getElementById("fiType").value;
+      var opts = document.getElementById("fiOpts").value.split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x; });
+      if (it.type === "state" && opts.length) it.options = opts; else if (it.type !== "state") delete it.options;
+      it.ph = document.getElementById("fiPh").value.trim();
+      if (newS !== ed.s) {
+        f.sections[ed.s].items.splice(ed.i, 1);
+        f.sections[newS].items.push(it);
+      }
+      es.dirty = true; es.editing = null;
+      renderFormEdit();
+    };
+    document.getElementById("fiBack").onclick = function () { es.editing = null; renderFormEdit(); };
   }
 
   // ---------- ВЫБОР ЛИФТА ----------
@@ -1268,7 +1506,7 @@
       model: d.model || "", org: settings().org || "",
       floorData:d.floorData || null, floorTop:d.floorTop || "", floorBottom:d.floorBottom || "",
       startedAt: d.startedAt || "", finishedAt: d.finishedAt || "",
-      login: acc.login || "", pwd: acc.pwd || "",
+      login: acc.login || "", pwd: acc.pwd || "", tok: acc.tok || "",
       items: Object.keys(d.results).map(function (k) {
         var r = d.results[k];
         var it = findItem(d.formType, k, d.lift && d.lift.u);
@@ -1311,11 +1549,18 @@
   function sendForResponse(p) {
     var ep = settings().endpoint;
     if (!ep) return Promise.reject(new Error("no-endpoint"));
+    var acc = account() || {};
+    if (acc.login && !p.login) p.login = acc.login;
+    if (acc.pwd && !p.pwd) p.pwd = acc.pwd;
+    if (acc.tok && !p.tok) p.tok = acc.tok;
     return fetch(ep, {
       method: "POST", mode: "cors", redirect: "follow",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(p)
-    }).then(function (r) { return r.json(); });
+    }).then(function (r) { return r.json(); }).then(function (r) {
+      if (r && r.error === "session-replaced") sessionKicked();
+      return r;
+    });
   }
 
   var sendJobs_ = {};
@@ -3276,7 +3521,7 @@
 
   // ---------- сервис-воркер: приложение обновляется само, чистить кеш не нужно ----------
   var pendingUpdate = false, updateReloading = false, hadSwController = !!navigator.serviceWorker.controller;
-  var APP_BUILD = "2.12.4";
+  var APP_BUILD = "2.13.0";
   function applyUpdate() {
     if (updateReloading) return;
     // Некоторые браузеры шлют update и controllerchange почти одновременно.
